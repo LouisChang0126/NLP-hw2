@@ -1,2 +1,3 @@
 outputs/
 *.pyc
+unsloth_compiled_cache/

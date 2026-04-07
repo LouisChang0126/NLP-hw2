@@ -1,5 +1,5 @@
 # ============================================================
-# inference.py — 推論與 Kaggle CSV 生成 (支援 TTA 多數決)
+# inference.py — 推論與 Kaggle CSV 生成 (支援 TTA 多數決, Unsloth)
 # ============================================================
 #
 # 用法:
@@ -9,13 +9,12 @@
 
 import argparse
 import csv
-import gc
 import re
 import os
 from collections import Counter
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from unsloth import FastLanguageModel
 from peft import PeftModel
 from tqdm import tqdm
 
@@ -54,45 +53,20 @@ if args.output_csv is None:
     parent = os.path.dirname(args.adapter_dir.rstrip("/"))
     args.output_csv = os.path.join(parent, "submission.csv")
 
-# -------------------- 載入模型 --------------------
+# -------------------- 載入模型 (Unsloth) --------------------
 print(f"[INFO] 載入 base model: {config.MODEL_NAME}")
-if config.USE_QLORA:
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
-    base_model = AutoModelForCausalLM.from_pretrained(
-        config.MODEL_NAME,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
-    )
-else:
-    base_model = AutoModelForCausalLM.from_pretrained(
-        config.MODEL_NAME,
-        device_map="auto",
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
-    )
-
-# 刪除不需要的多模態 Encoder 以釋放 VRAM（text-only 任務）
-for attr in ("vision_tower", "embed_vision", "audio_tower", "embed_audio"):
-    if hasattr(base_model.model, attr):
-        delattr(base_model.model, attr)
-        print(f"[INFO] 已刪除 base_model.model.{attr}")
-torch.cuda.empty_cache()
-gc.collect()
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name=config.MODEL_NAME,
+    max_seq_length=config.MAX_SEQ_LENGTH,
+    dtype=None,
+    load_in_4bit=config.USE_QLORA,
+    trust_remote_code=True,
+)
 
 print(f"[INFO] 載入 adapter: {args.adapter_dir}")
-model = PeftModel.from_pretrained(base_model, args.adapter_dir)
-model.eval()
+model = PeftModel.from_pretrained(model, args.adapter_dir)
+FastLanguageModel.for_inference(model)
 
-tokenizer = AutoTokenizer.from_pretrained(args.adapter_dir, trust_remote_code=True)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "left"

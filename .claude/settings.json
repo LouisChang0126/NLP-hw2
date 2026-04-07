@@ -31,7 +31,11 @@
       "Bash(tee /tmp/train_log.txt)",
       "Bash(echo \"Training started in background, PID=$!\")",
       "Read(//tmp/**)",
-      "Bash(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader)"
+      "Bash(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader)",
+      "Bash(python -c \"from unsloth import FastLanguageModel; print\\('OK'\\)\")",
+      "Bash(python -c \"import torch; print\\('torch', torch.__version__\\)\")",
+      "Bash(python -c \"import trl; print\\('trl', trl.__version__\\)\")",
+      "Bash(python -c \"import transformers; print\\('transformers', transformers.__version__\\)\")"
     ]
   }
 }

@@ -3,23 +3,24 @@
 # ============================================================
 
 # ---------- 模型 ----------
-MODEL_NAME = "google/gemma-4-E4B-it"   # HuggingFace 路徑或本地路徑
-# MODEL_NAME = "Qwen/Qwen3.5-9B" # "Qwen/Qwen3-8B"
+MODEL_NAME = "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"  # Unsloth 預量化版本 (快速下載)
+# MODEL_NAME = "google/gemma-4-E4B-it"           # 原版 HuggingFace
+# MODEL_NAME = "Qwen/Qwen3.5-9B"                 # "Qwen/Qwen3-8B"
 
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
-LORA_R = 32 # 64
+LORA_R = 64 # 32
 LORA_ALPHA = LORA_R
 LORA_DROPOUT = 0.05
 # Regex: only match language_model layers, exclude vision_tower (Gemma4ClippableLinear)
 LORA_TARGET_MODULES = r".*language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)"
 
 # ---------- 訓練超參數 ----------
-LEARNING_RATE = 5e-5
+LEARNING_RATE = 1e-4
 BATCH_SIZE = 2
 GRAD_ACCUMULATION_STEPS = 32 // BATCH_SIZE          # effective batch = 2 * 16 = 32
 NUM_EPOCHS = 3
-MAX_SEQ_LENGTH = 1536 # 2048
+MAX_SEQ_LENGTH = 2048 # 1536
 WARMUP_RATIO = 0.05
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER_TYPE = "cosine"

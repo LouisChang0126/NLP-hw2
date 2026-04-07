@@ -75,15 +75,22 @@ _USER_CONTENTS = [_user_content_0, _user_content_1, _user_content_2, _user_conte
 # Prompt 建構 (使用 Chat Template)
 # ============================================================
 
+def _get_tokenizer(tokenizer_or_processor):
+    """如果傳入的是 Processor (multimodal)，抽出底層 tokenizer。"""
+    if hasattr(tokenizer_or_processor, "tokenizer"):
+        return tokenizer_or_processor.tokenizer
+    return tokenizer_or_processor
+
 def build_prompt(dialog_1: list[dict], dialog_2: list[dict],
                  tokenizer, template_id: int = 0) -> str:
     """使用 tokenizer 的 chat template 組合 prompt。"""
+    tok = _get_tokenizer(tokenizer)
     flat_1 = flatten_dialog(dialog_1)
     flat_2 = flatten_dialog(dialog_2)
     user_content = _USER_CONTENTS[template_id](flat_1, flat_2)
 
     messages = [{"role": "user", "content": user_content}]
-    prompt = tokenizer.apply_chat_template(
+    prompt = tok.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
     return prompt
@@ -93,6 +100,7 @@ def get_response_template_ids(tokenizer) -> list[int]:
     用於 DataCollatorForCompletionOnlyLM。
     回傳 token IDs 而非字串，避免 special token 被 encode 拆散導致匹配失敗。
     相容 transformers 5.x: apply_chat_template(tokenize=True) 回傳 dict。"""
+    tok = _get_tokenizer(tokenizer)
     dummy = [{"role": "user", "content": "X"}]
 
     def _get_ids(result):
@@ -103,16 +111,16 @@ def get_response_template_ids(tokenizer) -> list[int]:
             return result["input_ids"]
         return result
 
-    without_ids = _get_ids(tokenizer.apply_chat_template(
+    without_ids = _get_ids(tok.apply_chat_template(
         dummy, tokenize=True, add_generation_prompt=False
     ))
-    with_gen_ids = _get_ids(tokenizer.apply_chat_template(
+    with_gen_ids = _get_ids(tok.apply_chat_template(
         dummy, tokenize=True, add_generation_prompt=True
     ))
     response_ids = with_gen_ids[len(without_ids):]
     if not response_ids:
         # fallback: 手動 encode 常見格式
-        response_ids = tokenizer.encode(
+        response_ids = tok.encode(
             "<start_of_turn>model\n", add_special_tokens=False
         )
     return response_ids

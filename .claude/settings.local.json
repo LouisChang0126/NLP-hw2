@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "Bash(python3 -c \"import json; d=json.load\\(open\\('c:/Users/user/Desktop/NLP hw2/data/train.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:2000]\\)\")",
-      "Bash(python3 -c \"import json; d=json.load\\(open\\('c:/Users/user/Desktop/NLP hw2/data/test.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:1000]\\)\")"
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('c:/Users/user/Desktop/NLP hw2/data/test.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:1000]\\)\")",
+      "Bash(python -c \"from trl import SFTConfig; print\\('SFTConfig OK'\\)\")",
+      "Bash(python -c \"from trl import SFTTrainer; print\\('SFTTrainer OK'\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('train.py', doraise=True\\); py_compile.compile\\('inference.py', doraise=True\\); print\\('Syntax OK'\\)\")",
+      "Bash(export CUDA_VISIBLE_DEVICES=4)",
+      "Bash(python /home/louis/NLP-hw2/train.py)",
+      "Bash(kill 85981 115171)",
+      "Bash(kill 152588 152561 284454 284455 284456)",
+      "Read(//home/louis/NLP-hw2/**)",
+      "Bash(xargs kill:*)"
     ]
   }
 }
