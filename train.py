@@ -35,9 +35,17 @@ print(f"[INFO] 實驗目錄: {run_dir}")
 # 2. 載入資料
 # ============================================================
 train_data, val_data = load_train_val()
-train_dataset = JudgeDataset(train_data)
+train_dataset = JudgeDataset(
+    train_data,
+    use_diverse_prompt=config.AUG_PROMPT_DIVERSE,
+    use_cot=config.AUG_REVERSE_COT,
+)
 val_dataset = JudgeDataset(val_data)
 print(f"[INFO] Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+aug_flags = (f"  Position Swap: {config.AUG_POSITION_SWAP}, "
+             f"Reverse-CoT: {config.AUG_REVERSE_COT}, "
+             f"Prompt Diverse: {config.AUG_PROMPT_DIVERSE}")
+print(f"[INFO] 擴增策略:{aug_flags}")
 
 # ============================================================
 # 3. 載入 Tokenizer

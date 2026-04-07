@@ -18,7 +18,7 @@ LEARNING_RATE = 2e-4
 BATCH_SIZE = 2
 GRAD_ACCUMULATION_STEPS = 8           # effective batch = 2 * 8 = 16
 NUM_EPOCHS = 3
-MAX_SEQ_LENGTH = 2048
+MAX_SEQ_LENGTH = 4096
 WARMUP_RATIO = 0.05
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER_TYPE = "cosine"
@@ -38,3 +38,9 @@ FP16 = False                          # QLoRA 下建議使用 bf16
 BF16 = True
 LOGGING_STEPS = 10
 SAVE_STRATEGY = "epoch"
+
+# ---------- 資料擴增 ----------
+AUG_POSITION_SWAP = True              # 策略1: 位置交換與標籤反轉
+AUG_REVERSE_COT = False               # 策略2: 本地逆向思維鏈 (需先跑 generate_cot.py)
+AUG_REVERSE_COT_FILE = "data/train_cot.json"  # CoT 生成結果路徑
+AUG_PROMPT_DIVERSE = True             # 策略3: Prompt 模板多樣化
