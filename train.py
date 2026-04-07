@@ -14,10 +14,10 @@ from transformers import (
     TrainingArguments,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 
 import config
-from dataset import JudgeDataset, load_train_val
+from dataset import JudgeDataset, load_train_val, get_response_template
 
 # ============================================================
 # 1. 動態輸出目錄與 config 備份
@@ -35,17 +35,6 @@ print(f"[INFO] 實驗目錄: {run_dir}")
 # 2. 載入資料
 # ============================================================
 train_data, val_data = load_train_val()
-train_dataset = JudgeDataset(
-    train_data,
-    use_diverse_prompt=config.AUG_PROMPT_DIVERSE,
-    use_cot=config.AUG_REVERSE_COT,
-)
-val_dataset = JudgeDataset(val_data)
-print(f"[INFO] Train: {len(train_dataset)}, Val: {len(val_dataset)}")
-aug_flags = (f"  Position Swap: {config.AUG_POSITION_SWAP}, "
-             f"Reverse-CoT: {config.AUG_REVERSE_COT}, "
-             f"Prompt Diverse: {config.AUG_PROMPT_DIVERSE}")
-print(f"[INFO] 擴增策略:{aug_flags}")
 
 # ============================================================
 # 3. 載入 Tokenizer
@@ -57,6 +46,21 @@ tokenizer = AutoTokenizer.from_pretrained(
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
+
+# ============================================================
+# 3.5 建立 Dataset (需要 tokenizer)
+# ============================================================
+train_dataset = JudgeDataset(
+    train_data, tokenizer,
+    use_diverse_prompt=config.AUG_PROMPT_DIVERSE,
+    use_cot=config.AUG_REVERSE_COT,
+)
+val_dataset = JudgeDataset(val_data, tokenizer)
+print(f"[INFO] Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+aug_flags = (f"  Position Swap: {config.AUG_POSITION_SWAP}, "
+             f"Reverse-CoT: {config.AUG_REVERSE_COT}, "
+             f"Prompt Diverse: {config.AUG_PROMPT_DIVERSE}")
+print(f"[INFO] 擴增策略:{aug_flags}")
 
 # ============================================================
 # 4. 載入模型 (QLoRA 4-bit 或常規)
@@ -99,7 +103,17 @@ model = get_peft_model(model, lora_config)
 model.print_trainable_parameters()
 
 # ============================================================
-# 6. 訓練參數
+# 6. DataCollator — 只對 Verdict 部分計算 Loss
+# ============================================================
+response_template = get_response_template(tokenizer)
+print(f"[INFO] Response template: {repr(response_template)}")
+collator = DataCollatorForCompletionOnlyLM(
+    response_template=response_template,
+    tokenizer=tokenizer,
+)
+
+# ============================================================
+# 7. 訓練參數
 # ============================================================
 training_args = TrainingArguments(
     output_dir=run_dir,
@@ -116,13 +130,16 @@ training_args = TrainingArguments(
     logging_steps=config.LOGGING_STEPS,
     save_strategy=config.SAVE_STRATEGY,
     eval_strategy="epoch",
+    save_total_limit=2,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
     seed=config.SEED,
     report_to="none",
     optim="paged_adamw_8bit" if config.USE_QLORA else "adamw_torch",
 )
 
 # ============================================================
-# 7. 啟動 SFTTrainer 微調
+# 8. 啟動 SFTTrainer 微調
 # ============================================================
 trainer = SFTTrainer(
     model=model,
@@ -131,13 +148,14 @@ trainer = SFTTrainer(
     eval_dataset=val_dataset,
     args=training_args,
     max_seq_length=config.MAX_SEQ_LENGTH,
+    data_collator=collator,
 )
 
 print("[INFO] 開始訓練...")
 trainer.train()
 
 # ============================================================
-# 8. 儲存最終 Adapter 權重
+# 9. 儲存最終 Adapter 權重 (已自動載入 best checkpoint)
 # ============================================================
 final_dir = os.path.join(run_dir, "final_adapter")
 model.save_pretrained(final_dir)

@@ -29,17 +29,21 @@ VERDICT_EXPLAIN = {
     "neither": "the human considered both responses equally bad",
 }
 
-def build_cot_prompt(dialog_1, dialog_2, verdict):
-    """建立要求模型生成理由的 prompt。"""
+def build_cot_prompt(dialog_1, dialog_2, verdict, tokenizer):
+    """建立要求模型生成理由的 prompt，使用 chat template。"""
     flat_1 = flatten_dialog(dialog_1)
     flat_2 = flatten_dialog(dialog_2)
     explanation = VERDICT_EXPLAIN[verdict]
-    return (
+    user_content = (
         f"You are an objective AI evaluator. Below are two AI assistant responses "
         f"to the same user query. In this comparison, {explanation}.\n\n"
         f"### Response A\n{flat_1}\n\n"
         f"### Response B\n{flat_2}\n\n"
-        f"Briefly explain why this judgment makes sense in 2-3 sentences:\n"
+        f"Briefly explain why this judgment makes sense in 2-3 sentences:"
+    )
+    messages = [{"role": "user", "content": user_content}]
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
     )
 
 def is_valid_rationale(text: str) -> bool:
@@ -89,7 +93,7 @@ success = 0
 
 for sample in tqdm(train_data, desc="Generating CoT"):
     prompt = build_cot_prompt(
-        sample["dialog_1"], sample["dialog_2"], sample["verdict"]
+        sample["dialog_1"], sample["dialog_2"], sample["verdict"], tokenizer
     )
     inputs = tokenizer(
         prompt, return_tensors="pt", truncation=True, max_length=config.MAX_SEQ_LENGTH

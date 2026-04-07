@@ -4,12 +4,14 @@
 #
 # 用法:
 #   python inference.py --adapter_dir outputs/gemma-3-4b-it_04071230/final_adapter
+#   python inference.py --adapter_dir outputs/.../final_adapter --batch_size 4
 #
 
 import argparse
 import csv
 import re
 import os
+from collections import Counter
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -41,7 +43,7 @@ parser.add_argument(
 parser.add_argument(
     "--batch_size",
     type=int,
-    default=1,
+    default=4,
     help="推論 batch size",
 )
 args = parser.parse_args()
@@ -82,46 +84,81 @@ model.eval()
 tokenizer = AutoTokenizer.from_pretrained(args.adapter_dir, trust_remote_code=True)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
+# 推論時必須使用 left padding，才能正確做 batch generation
+tokenizer.padding_side = "left"
+
+# -------------------- 推論長度 --------------------
+max_new_tokens = 250 if config.AUG_REVERSE_COT else 5
 
 # -------------------- 解析 verdict --------------------
 VALID_VERDICTS = {"A", "B", "tie", "neither"}
 
 def parse_verdict(generated_text: str, prompt: str) -> str:
-    """從生成文本中提取 verdict。"""
-    # 移除 prompt 部分，只看生成的新 token
+    """從生成文本中提取 verdict。支援 CoT 模式（答案在最後）。"""
     answer = generated_text[len(prompt):].strip()
 
-    # 嘗試直接匹配
-    first_token = answer.split()[0] if answer.split() else ""
-    # 去除標點
-    first_token_clean = re.sub(r"[^a-zA-Z]", "", first_token)
+    if not answer:
+        return "tie"
 
+    # CoT 模式：verdict 在最後一行
+    lines = [l.strip() for l in answer.split("\n") if l.strip()]
+    last_line = lines[-1] if lines else answer
+
+    # 嘗試直接匹配最後一行的第一個 token
+    first_token = last_line.split()[0] if last_line.split() else ""
+    first_token_clean = re.sub(r"[^a-zA-Z]", "", first_token)
     if first_token_clean in VALID_VERDICTS:
         return first_token_clean
 
-    # 嘗試在整個回答中搜尋
+    # 也嘗試第一行（非 CoT 模式）
+    first_line = lines[0] if lines else answer
+    first_word = first_line.split()[0] if first_line.split() else ""
+    first_word_clean = re.sub(r"[^a-zA-Z]", "", first_word)
+    if first_word_clean in VALID_VERDICTS:
+        return first_word_clean
+
+    # 從整段回答中搜尋（優先從後面找）
     answer_lower = answer.lower()
-    for v in ["neither", "tie"]:  # 先檢查多字元的
-        if v in answer_lower:
+    last_lower = last_line.lower()
+
+    for v in ["neither", "tie"]:
+        if v in last_lower:
             return v
-    if answer_lower.startswith("a") or "response a" in answer_lower:
+    if last_lower.startswith("a") or "response a" in last_lower:
         return "A"
-    if answer_lower.startswith("b") or "response b" in answer_lower:
+    if last_lower.startswith("b") or "response b" in last_lower:
         return "B"
 
-    # fallback
+    # 全文搜尋 fallback
+    for v in ["neither", "tie"]:
+        if v in answer_lower:
+            return v
+    if "response a" in answer_lower:
+        return "A"
+    if "response b" in answer_lower:
+        return "B"
+
     return "tie"
 
-# -------------------- 推論 --------------------
+# -------------------- 批次推論 --------------------
 test_data = load_json(args.test_json)
 print(f"[INFO] 測試資料筆數: {len(test_data)}")
+print(f"[INFO] Batch size: {args.batch_size}, max_new_tokens: {max_new_tokens}")
 
 results = []
-for sample in tqdm(test_data, desc="Inference"):
-    prompt = build_prompt(sample["dialog_1"], sample["dialog_2"])
+batch_size = args.batch_size
+
+for i in tqdm(range(0, len(test_data), batch_size), desc="Batched Inference"):
+    batch_samples = test_data[i : i + batch_size]
+    prompts = [
+        build_prompt(s["dialog_1"], s["dialog_2"], tokenizer)
+        for s in batch_samples
+    ]
+
     inputs = tokenizer(
-        prompt,
+        prompts,
         return_tensors="pt",
+        padding=True,
         truncation=True,
         max_length=config.MAX_SEQ_LENGTH,
     ).to(model.device)
@@ -129,18 +166,17 @@ for sample in tqdm(test_data, desc="Inference"):
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=5,
+            max_new_tokens=max_new_tokens,
             do_sample=False,
-            temperature=1.0,
             pad_token_id=tokenizer.pad_token_id,
         )
 
-    generated = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    verdict = parse_verdict(generated, prompt)
-    results.append({"id": sample["id"], "verdict": verdict})
+    for j, output in enumerate(outputs):
+        generated = tokenizer.decode(output, skip_special_tokens=True)
+        verdict = parse_verdict(generated, prompts[j])
+        results.append({"id": batch_samples[j]["id"], "verdict": verdict})
 
 # -------------------- 寫入 CSV --------------------
-# 依 id 排序確保順序正確
 results.sort(key=lambda x: x["id"])
 
 with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
@@ -151,7 +187,5 @@ with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
 print(f"[INFO] 已生成 {len(results)} 筆預測")
 print(f"[INFO] CSV 已儲存至: {args.output_csv}")
 
-# 統計 verdict 分佈
-from collections import Counter
 dist = Counter(r["verdict"] for r in results)
 print(f"[INFO] Verdict 分佈: {dict(dist)}")
