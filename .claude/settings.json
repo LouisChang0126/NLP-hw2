@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import json; d=json.load\\(open\\('c:/Users/user/Desktop/NLP hw2/data/train.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:2000]\\)\")",
+      "Bash(python -c \"import json; d=json.load\\(open\\(r'c:\\\\Users\\\\user\\\\Desktop\\\\NLP hw2\\\\data\\\\train.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:2000]\\)\")",
+      "Bash(python -c \"import json; d=json.load\\(open\\('data/train.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:2000]\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(where python:*)",
+      "Bash(conda --version)",
+      "Bash(conda activate:*)",
+      "Bash(conda info:*)",
+      "Bash(/c/Users/user/miniconda3/python.exe -c \"import json; d=json.load\\(open\\('data/train.json','r',encoding='utf-8'\\)\\); print\\(json.dumps\\(d[0],indent=2,ensure_ascii=False\\)[:2000]\\)\")"
+    ]
+  }
+}
