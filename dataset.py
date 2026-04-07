@@ -6,6 +6,7 @@ import json
 import copy
 import random
 from torch.utils.data import Dataset
+from sklearn.model_selection import train_test_split
 
 import config
 
@@ -169,19 +170,24 @@ def load_json(path: str) -> list[dict]:
         return json.load(f)
 
 def load_train_val(val_ratio: float = None):
-    """讀取 train.json，套用擴增策略，切分為 train / val。"""
+    """讀取 train.json，套用擴增策略，以分層抽樣切分為 train / val。"""
     if val_ratio is None:
         val_ratio = config.VAL_RATIO
     data = load_json(config.TRAIN_JSON)
 
-    random.seed(config.SEED)
-    random.shuffle(data)
+    # --- 修改點：使用 Stratified Split 取代純隨機切分 ---
+    # 提取所有資料的 verdict 作為分層的依據
+    verdicts = [sample["verdict"] for sample in data]
+    
+    train_data, val_data = train_test_split(
+        data, 
+        test_size=val_ratio, 
+        random_state=config.SEED, 
+        stratify=verdicts  # <--- 關鍵：保證 train 和 val 的 4 個 class 比例一致
+    )
+    # --------------------------------------------------
 
-    split = int(len(data) * (1 - val_ratio))
-    train_data = data[:split]
-    val_data = data[split:]
-
-    # --- 策略 2: 合併 CoT 理由 ---
+    # 後面的策略 2 (CoT) 和 策略 1 (Position Swap) 邏輯完全不用動，保持原樣
     if config.AUG_REVERSE_COT:
         try:
             cot_data = load_json(config.AUG_REVERSE_COT_FILE)
