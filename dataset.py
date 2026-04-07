@@ -91,14 +91,24 @@ def build_prompt(dialog_1: list[dict], dialog_2: list[dict],
 def get_response_template_ids(tokenizer) -> list[int]:
     """自動偵測 chat template 中 model/assistant 回覆的起始標記 (token IDs)。
     用於 DataCollatorForCompletionOnlyLM。
-    回傳 token IDs 而非字串，避免 special token 被 encode 拆散導致匹配失敗。"""
+    回傳 token IDs 而非字串，避免 special token 被 encode 拆散導致匹配失敗。
+    相容 transformers 5.x: apply_chat_template(tokenize=True) 回傳 dict。"""
     dummy = [{"role": "user", "content": "X"}]
-    without_ids = tokenizer.apply_chat_template(
+
+    def _get_ids(result):
+        # apply_chat_template may return a list or a BatchEncoding/dict
+        if hasattr(result, "input_ids"):
+            return result.input_ids
+        if hasattr(result, "__getitem__") and not isinstance(result, list):
+            return result["input_ids"]
+        return result
+
+    without_ids = _get_ids(tokenizer.apply_chat_template(
         dummy, tokenize=True, add_generation_prompt=False
-    )
-    with_gen_ids = tokenizer.apply_chat_template(
+    ))
+    with_gen_ids = _get_ids(tokenizer.apply_chat_template(
         dummy, tokenize=True, add_generation_prompt=True
-    )
+    ))
     response_ids = with_gen_ids[len(without_ids):]
     if not response_ids:
         # fallback: 手動 encode 常見格式

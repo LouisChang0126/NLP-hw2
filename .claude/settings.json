@@ -9,7 +9,24 @@
       "Bash(conda --version)",
       "Bash(conda activate:*)",
       "Bash(conda info:*)",
-      "Bash(/c/Users/user/miniconda3/python.exe -c \"import json; d=json.load\\(open\\('data/train.json','r',encoding='utf-8'\\)\\); print\\(json.dumps\\(d[0],indent=2,ensure_ascii=False\\)[:2000]\\)\")"
+      "Bash(/c/Users/user/miniconda3/python.exe -c \"import json; d=json.load\\(open\\('data/train.json','r',encoding='utf-8'\\)\\); print\\(json.dumps\\(d[0],indent=2,ensure_ascii=False\\)[:2000]\\)\")",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from trl import SFTTrainer, DataCollatorForCompletionOnlyLM; print\\('OK'\\)\")",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Read(//home/louis/**)",
+      "Bash(claude mcp:*)",
+      "Bash(ls ~/.local/bin/claude*)",
+      "Read(//usr/local/bin/**)",
+      "Read(//usr/**)",
+      "Bash(/home/louis/.vscode-server/extensions/anthropic.claude-code-2.1.92-linux-x64/resources/native-binary/claude mcp:*)",
+      "Bash(python -c \"import bitsandbytes; print\\(bitsandbytes.__version__\\)\")",
+      "Bash(python train.py)",
+      "Bash(python -c \"from trl import SFTTrainer, SFTConfig; import inspect; print\\(list\\(inspect.signature\\(SFTTrainer.__init__\\).parameters.keys\\(\\)\\)\\)\")",
+      "Bash(python -c \"from trl import SFTConfig; import inspect; sig = inspect.signature\\(SFTConfig.__init__\\); params = list\\(sig.parameters.keys\\(\\)\\); print\\([p for p in params if 'max' in p.lower\\(\\) or 'seq' in p.lower\\(\\) or 'length' in p.lower\\(\\)]\\)\")",
+      "Bash(nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader)",
+      "Bash(CUDA_VISIBLE_DEVICES=0 python train.py)",
+      "Bash(CUDA_VISIBLE_DEVICES=0 PYTORCH_ALLOC_CONF=expandable_segments:True python train.py)"
     ]
   }
 }

@@ -11,13 +11,113 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, SFTConfig
+from collator import DataCollatorForCompletionOnlyLM
+from datasets import Dataset as HFDataset
+import torch.nn as nn
 
 import config
 from dataset import JudgeDataset, load_train_val, get_response_template_ids
+
+
+def _chunked_ce_forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+    """Monkey-patch for Gemma4ForConditionalGeneration.forward:
+    Process hidden_states through lm_head in chunks to avoid allocating
+    the full [n_tokens, vocab_size=262144] logits tensor all at once.
+    """
+    import torch.nn.functional as F
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4CausalLMOutputWithPast
+
+    # Strip flags that are not part of the original API
+    for key in ("skip_logits", "return_token_accuracy", "use_token_scaling",
+                "num_items_in_batch"):
+        kwargs.pop(key, None)
+
+    # Only pass kwargs that Gemma4Model accepts (text-only training: no pixel_values etc.)
+    body_kwargs = {k: v for k, v in kwargs.items()
+                   if k in ("position_ids", "past_key_values", "inputs_embeds",
+                             "mm_token_type_ids", "image_position_ids",
+                             "video_position_ids", "input_features_mask",
+                             "pixel_values", "pixel_values_videos", "input_features")}
+
+    # Run the model body (vision/audio/language encoder) — skip lm_head
+    body_out = self.model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        use_cache=False,
+        return_dict=True,
+        **body_kwargs,
+    )
+    hidden_states = body_out.last_hidden_state  # [batch, seq_len, hidden_dim]
+
+    loss = None
+    if labels is not None:
+        # Align hidden states and labels (teacher forcing: predict next token)
+        # hidden_states[:, :-1, :] predicts labels[:, 1:]
+        hs = hidden_states[:, :-1, :].contiguous()   # [batch, seq_len-1, H]
+        shift_labels = labels[:, 1:].contiguous()     # [batch, seq_len-1]
+
+        # Apply attention mask to select valid (non-padding) positions
+        if attention_mask is not None:
+            shift_attn = attention_mask[:, -hs.shape[1]:]
+            valid_pos = shift_attn.bool()
+        else:
+            valid_pos = shift_labels != -100
+
+        flat_hs = hs[valid_pos]            # [n_valid, H]
+        flat_labels = shift_labels[valid_pos]  # [n_valid]
+
+        # Further filter -100 (masked) positions
+        keep = flat_labels != -100
+        flat_hs = flat_hs[keep]
+        flat_labels = flat_labels[keep]
+
+        n_tokens = flat_hs.shape[0]
+        softcap = getattr(self.config.get_text_config(), "final_logit_softcapping", None)
+
+        # Chunked lm_head + CE: each chunk needs [CHUNK, vocab] in float32 (~67 MB at 64 tokens)
+        CHUNK = 64
+        loss_parts = []
+        for start in range(0, n_tokens, CHUNK):
+            chunk_hs = flat_hs[start: start + CHUNK]
+            chunk_labels = flat_labels[start: start + CHUNK]
+            chunk_logits = self.lm_head(chunk_hs).float()  # [chunk, vocab_size]
+            if softcap is not None:
+                chunk_logits = (chunk_logits / softcap).tanh() * softcap
+            ce = F.cross_entropy(chunk_logits, chunk_labels, reduction="sum")
+            loss_parts.append(ce)
+            del chunk_logits  # free immediately
+
+        if loss_parts and n_tokens > 0:
+            loss = torch.stack(loss_parts).sum() / n_tokens
+        else:
+            loss = hidden_states.sum() * 0  # differentiable zero
+
+    return Gemma4CausalLMOutputWithPast(
+        loss=loss,
+        logits=None,          # not needed for training; avoids 1+ GB allocation
+        past_key_values=body_out.past_key_values,
+        hidden_states=body_out.hidden_states,
+        attentions=body_out.attentions,
+        image_hidden_states=body_out.image_hidden_states,
+        audio_hidden_states=body_out.audio_hidden_states,
+    )
+
+
+class MemoryEfficientSFTTrainer(SFTTrainer):
+    """Use chunked cross-entropy loss; model returns None for logits to save memory."""
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        inputs["use_cache"] = False
+        inputs.pop("_prediction_loss_only", None)
+        outputs = model(**inputs)
+        loss = outputs.loss
+        if loss is None:
+            raise ValueError("Model did not return a loss. Ensure `labels` are in inputs.")
+        return (loss, outputs) if return_outputs else loss
+
 
 # ============================================================
 # 0. 全域 Seed 固定 (確保可復現)
@@ -88,18 +188,25 @@ if config.USE_QLORA:
     model = AutoModelForCausalLM.from_pretrained(
         config.MODEL_NAME,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map="cuda:0",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
+        attn_implementation="eager",
     )
-    model = prepare_model_for_kbit_training(model)
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 else:
     model = AutoModelForCausalLM.from_pretrained(
         config.MODEL_NAME,
-        device_map="auto",
+        device_map="cuda:0",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
+        attn_implementation="eager",
     )
+
+# Apply chunked cross-entropy monkey-patch to avoid OOM from full logits materialization
+import types
+model._orig_forward = model.forward
+model.forward = types.MethodType(_chunked_ce_forward, model)
 
 # ============================================================
 # 5. 套用 LoRA
@@ -129,7 +236,7 @@ collator = DataCollatorForCompletionOnlyLM(
 # ============================================================
 # 7. 訓練參數
 # ============================================================
-training_args = TrainingArguments(
+training_args = SFTConfig(
     output_dir=run_dir,
     num_train_epochs=config.NUM_EPOCHS,
     per_device_train_batch_size=config.BATCH_SIZE,
@@ -150,18 +257,26 @@ training_args = TrainingArguments(
     seed=config.SEED,
     report_to="none",
     optim="paged_adamw_8bit" if config.USE_QLORA else "adamw_torch",
+    max_length=config.MAX_SEQ_LENGTH,
+    dataset_text_field="text",
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"use_reentrant": False},
+    use_liger_kernel=True,
 )
 
 # ============================================================
 # 8. 啟動 SFTTrainer 微調
 # ============================================================
-trainer = SFTTrainer(
+# Convert torch Datasets to HuggingFace Datasets (required by trl 1.0+)
+hf_train = HFDataset.from_dict({"text": [train_dataset[i]["text"] for i in range(len(train_dataset))]})
+hf_val = HFDataset.from_dict({"text": [val_dataset[i]["text"] for i in range(len(val_dataset))]})
+
+trainer = MemoryEfficientSFTTrainer(
     model=model,
-    tokenizer=tokenizer,
-    train_dataset=train_dataset,
-    eval_dataset=val_dataset,
+    processing_class=tokenizer,
+    train_dataset=hf_train,
+    eval_dataset=hf_val,
     args=training_args,
-    max_seq_length=config.MAX_SEQ_LENGTH,
     data_collator=collator,
 )
 
