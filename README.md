@@ -36,10 +36,21 @@ INLP HW2 — 使用 LoRA / QLoRA 微調開源 LLM，建立預測人類偏好的 
 ## 環境需求
 
 - Python 3.10+
-- CUDA GPU（建議 RTX 4090 24GB）
+- CUDA GPU（RTX 4090 24GB 可運行；A6000 48GB 更寬裕）
+
+Gemma 4 需要從 source 安裝 transformers 與 peft：
 
 ```bash
-pip install torch transformers peft trl bitsandbytes accelerate scikit-learn
+pip install torch>=2.1.0
+pip install git+https://github.com/huggingface/transformers.git
+pip install git+https://github.com/huggingface/peft.git
+pip install trl==1.0.0 bitsandbytes liger-kernel accelerate datasets scikit-learn
+```
+
+或直接使用 requirements.txt：
+
+```bash
+pip install -r requirements.txt
 ```
 
 ## 快速開始
@@ -49,8 +60,10 @@ pip install torch transformers peft trl bitsandbytes accelerate scikit-learn
 調整 `config.py` 中的參數後直接執行：
 
 ```bash
-python train.py
+CUDA_VISIBLE_DEVICES=0 PYTORCH_ALLOC_CONF=expandable_segments:True python train.py
 ```
+
+> **記憶體注意**：Gemma 4 為多模態模型（含 vision / audio encoder），即使 text-only 訓練，模型本體也需約 16 GB VRAM。請確保 GPU 記憶體充足。
 
 訓練會自動：
 - 建立帶時間戳的實驗目錄 `outputs/{model}_{MMDDHHMM}/`
@@ -100,10 +113,10 @@ python generate_cot.py
 | 參數 | 預設值 | 說明 |
 |------|--------|------|
 | `LEARNING_RATE` | `2e-4` | 學習率 |
-| `BATCH_SIZE` | `2` | per-device batch size |
-| `GRAD_ACCUMULATION_STEPS` | `8` | 梯度累積（effective batch = 16）|
+| `BATCH_SIZE` | `1` | per-device batch size（Gemma 4 記憶體限制）|
+| `GRAD_ACCUMULATION_STEPS` | `16` | 梯度累積（effective batch = 16）|
 | `NUM_EPOCHS` | `3` | 訓練 epoch 數 |
-| `MAX_SEQ_LENGTH` | `4096` | 最大序列長度 |
+| `MAX_SEQ_LENGTH` | `1024` | 最大序列長度（資料 p95 ≈ 1362 tokens）|
 
 ### 資料擴增
 
@@ -120,10 +133,17 @@ python generate_cot.py
 - 推論固定使用模板 0；訓練時可隨機切換 4 種模板以提升泛化能力
 
 ### 訓練優化
-- `DataCollatorForCompletionOnlyLM`：只對 verdict（及 CoT rationale）計算 loss，不浪費在背 prompt
+- `DataCollatorForCompletionOnlyLM`（`collator.py`）：只對 verdict（及 CoT rationale）計算 loss
 - `load_best_model_at_end=True`：自動載入 val loss 最低的 checkpoint
 - 分層抽樣（Stratified Split）：確保 train/val 的 4 類 verdict 比例一致
 - 全域 seed 固定（`random` / `numpy` / `torch` / `cudnn`）：相同 config 可復現結果
+- Chunked cross-entropy（`_chunked_ce_forward` in `train.py`）：繞過 Gemma 4 full logits materialization（262K vocab × seq_len 需 1+ GB），在 hidden_states 層分塊計算 CE，讓 24 GB VRAM 可訓練
+
+### Gemma 4 相容性
+Gemma 4 是多模態模型，包含 vision tower 和 audio tower：
+- `LORA_TARGET_MODULES` 使用 regex（`.*language_model\..*\.(q_proj|...)`）限定只套用 LoRA 到 language model，避免 peft 嘗試對 `Gemma4ClippableLinear`（vision encoder 專用層）套 LoRA
+- `collator.py` 為 trl 1.0.0 補回已移除的 `DataCollatorForCompletionOnlyLM`
+- `get_response_template_ids` 相容 transformers 5.x（`apply_chat_template` 回傳 `BatchEncoding` 而非 list）
 
 ### 位置偏差對策
 - Position Swap 擴增：每筆資料額外產生 dialog 交換版本，迫使模型不依賴位置判斷

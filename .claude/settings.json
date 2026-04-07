@@ -26,7 +26,12 @@
       "Bash(python -c \"from trl import SFTConfig; import inspect; sig = inspect.signature\\(SFTConfig.__init__\\); params = list\\(sig.parameters.keys\\(\\)\\); print\\([p for p in params if 'max' in p.lower\\(\\) or 'seq' in p.lower\\(\\) or 'length' in p.lower\\(\\)]\\)\")",
       "Bash(nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader)",
       "Bash(CUDA_VISIBLE_DEVICES=0 python train.py)",
-      "Bash(CUDA_VISIBLE_DEVICES=0 PYTORCH_ALLOC_CONF=expandable_segments:True python train.py)"
+      "Bash(CUDA_VISIBLE_DEVICES=0 PYTORCH_ALLOC_CONF=expandable_segments:True python train.py)",
+      "Bash(CUDA_VISIBLE_DEVICES=0 PYTORCH_ALLOC_CONF=expandable_segments:True timeout 300 python train.py)",
+      "Bash(tee /tmp/train_log.txt)",
+      "Bash(echo \"Training started in background, PID=$!\")",
+      "Read(//tmp/**)",
+      "Bash(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader)"
     ]
   }
 }
