@@ -2,6 +2,7 @@
 # train.py — LoRA / QLoRA 微調主程式
 # ============================================================
 
+import gc
 import os
 import shutil
 from datetime import datetime
@@ -203,6 +204,14 @@ else:
         attn_implementation="sdpa",
     )
 
+# 刪除不需要的多模態 Encoder 以釋放 VRAM（text-only 任務）
+for attr in ("vision_tower", "embed_vision", "audio_tower", "embed_audio"):
+    if hasattr(model.model, attr):
+        delattr(model.model, attr)
+        print(f"[INFO] 已刪除 model.model.{attr}")
+torch.cuda.empty_cache()
+gc.collect()
+
 # Apply chunked cross-entropy monkey-patch to avoid OOM from full logits materialization
 import types
 model._orig_forward = model.forward
@@ -262,6 +271,8 @@ training_args = SFTConfig(
     gradient_checkpointing=True,
     gradient_checkpointing_kwargs={"use_reentrant": False},
     use_liger_kernel=True,
+    dataloader_num_workers=8,  # 開啟 8 個子程序預先載入資料
+    dataloader_prefetch_factor=2, # 預取資料
 )
 
 # ============================================================

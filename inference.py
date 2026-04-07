@@ -9,6 +9,7 @@
 
 import argparse
 import csv
+import gc
 import re
 import os
 from collections import Counter
@@ -68,6 +69,7 @@ if config.USE_QLORA:
         device_map="auto",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
+        attn_implementation="sdpa",
     )
 else:
     base_model = AutoModelForCausalLM.from_pretrained(
@@ -75,7 +77,16 @@ else:
         device_map="auto",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
+        attn_implementation="sdpa",
     )
+
+# 刪除不需要的多模態 Encoder 以釋放 VRAM（text-only 任務）
+for attr in ("vision_tower", "embed_vision", "audio_tower", "embed_audio"):
+    if hasattr(base_model.model, attr):
+        delattr(base_model.model, attr)
+        print(f"[INFO] 已刪除 base_model.model.{attr}")
+torch.cuda.empty_cache()
+gc.collect()
 
 print(f"[INFO] 載入 adapter: {args.adapter_dir}")
 model = PeftModel.from_pretrained(base_model, args.adapter_dir)
