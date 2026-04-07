@@ -4,20 +4,20 @@
 
 # ---------- 模型 ----------
 MODEL_NAME = "google/gemma-4-E4B-it"   # HuggingFace 路徑或本地路徑
-# MODEL_NAME = "Qwen/Qwen3.5-9B" # "Qwen/Qwen3-8B" "tiiuae/Falcon-H1R-7B"
+# MODEL_NAME = "Qwen/Qwen3.5-9B" # "Qwen/Qwen3-8B"
 
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
-LORA_R = 64 # 128
-LORA_ALPHA = LORA_R * 2
+LORA_R = 32 # 64
+LORA_ALPHA = LORA_R
 LORA_DROPOUT = 0.05
 # Regex: only match language_model layers, exclude vision_tower (Gemma4ClippableLinear)
 LORA_TARGET_MODULES = r".*language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)"
 
 # ---------- 訓練超參數 ----------
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 5e-5
 BATCH_SIZE = 2
-GRAD_ACCUMULATION_STEPS = 16 // BATCH_SIZE          # effective batch = 2 * 16 = 32
+GRAD_ACCUMULATION_STEPS = 32 // BATCH_SIZE          # effective batch = 2 * 16 = 32
 NUM_EPOCHS = 3
 MAX_SEQ_LENGTH = 1536 # 2048
 WARMUP_RATIO = 0.05
@@ -38,6 +38,7 @@ SEED = 42
 FP16 = False                          # QLoRA 下建議使用 bf16
 BF16 = True
 LOGGING_STEPS = 10
+EVAL_EVERY_N_EPOCH = 0.25              # 每 n 個 epoch 做一次 validation
 SAVE_STRATEGY = "epoch"
 
 # ---------- 資料擴增 ----------

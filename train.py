@@ -12,6 +12,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
+    TrainerCallback,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer, SFTConfig
@@ -20,7 +21,7 @@ from datasets import Dataset as HFDataset
 import torch.nn as nn
 
 import config
-from dataset import JudgeDataset, load_train_val, get_response_template_ids
+from dataset import JudgeDataset, load_train_val, get_response_template_ids, build_prompt
 
 
 def _chunked_ce_forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
@@ -37,13 +38,38 @@ def _chunked_ce_forward(self, input_ids=None, attention_mask=None, labels=None, 
         kwargs.pop(key, None)
 
     # Only pass kwargs that Gemma4Model accepts (text-only training: no pixel_values etc.)
-    body_kwargs = {k: v for k, v in kwargs.items()
-                   if k in ("position_ids", "past_key_values", "inputs_embeds",
-                             "mm_token_type_ids", "image_position_ids",
-                             "video_position_ids", "input_features_mask",
-                             "pixel_values", "pixel_values_videos", "input_features")}
+    _allowed = ("position_ids", "past_key_values", "inputs_embeds",
+                "mm_token_type_ids", "image_position_ids",
+                "video_position_ids", "input_features_mask",
+                "pixel_values", "pixel_values_videos", "input_features",
+                "cache_position")
+    body_kwargs = {k: v for k, v in kwargs.items() if k in _allowed}
 
-    # Run the model body (vision/audio/language encoder) — skip lm_head
+    # Inference mode (generation): compute only last-token logits to save VRAM
+    if labels is None:
+        body_out = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=kwargs.get("use_cache", True),
+            return_dict=True,
+            **body_kwargs,
+        )
+        last_hs = body_out.last_hidden_state[:, -1:, :]
+        logits = self.lm_head(last_hs).float()
+        softcap = getattr(self.config.get_text_config(), "final_logit_softcapping", None)
+        if softcap is not None:
+            logits = (logits / softcap).tanh() * softcap
+        return Gemma4CausalLMOutputWithPast(
+            loss=None,
+            logits=logits,
+            past_key_values=body_out.past_key_values,
+            hidden_states=body_out.hidden_states,
+            attentions=body_out.attentions,
+            image_hidden_states=getattr(body_out, "image_hidden_states", None),
+            audio_hidden_states=getattr(body_out, "audio_hidden_states", None),
+        )
+
+    # Training mode: chunked cross-entropy
     body_out = self.model(
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -79,7 +105,7 @@ def _chunked_ce_forward(self, input_ids=None, attention_mask=None, labels=None, 
         softcap = getattr(self.config.get_text_config(), "final_logit_softcapping", None)
 
         # Chunked lm_head + CE: each chunk needs [CHUNK, vocab] in float32 (~67 MB at 64 tokens)
-        CHUNK = 128
+        CHUNK = 512
         loss_parts = []
         for start in range(0, n_tokens, CHUNK):
             chunk_hs = flat_hs[start: start + CHUNK]
@@ -118,6 +144,59 @@ class MemoryEfficientSFTTrainer(SFTTrainer):
         if loss is None:
             raise ValueError("Model did not return a loss. Ensure `labels` are in inputs.")
         return (loss, outputs) if return_outputs else loss
+
+
+class EvalAccCallback(TrainerCallback):
+    """每次 eval 後用 generation 算 val accuracy，並將 checkpoint 重新命名為
+    ckpt_{epoch}_{val_acc} 格式。"""
+
+    def __init__(self, val_data, tokenizer, run_dir):
+        self.val_data = val_data
+        self.tokenizer = tokenizer
+        self.run_dir = run_dir
+        self._last_val_acc = 0.0
+        self.best_val_acc = 0.0
+        self.best_ckpt = None
+
+    def on_evaluate(self, args, state, control, model=None, **kwargs):
+        if model is None:
+            return
+        model.eval()
+        correct = 0
+        total = len(self.val_data)
+
+        for sample in self.val_data:
+            prompt = build_prompt(
+                sample["dialog_1"], sample["dialog_2"], self.tokenizer
+            )
+            inputs = self.tokenizer(
+                prompt, return_tensors="pt", truncation=True,
+                max_length=config.MAX_SEQ_LENGTH,
+            ).to(model.device)
+            with torch.no_grad():
+                out = model.generate(**inputs, max_new_tokens=3, do_sample=False)
+            pred = self.tokenizer.decode(
+                out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+            ).strip().lower()
+            pred = pred.split()[0] if pred else ""
+            if pred == sample["verdict"].lower():
+                correct += 1
+
+        self._last_val_acc = correct / total if total > 0 else 0
+        print(f"[EVAL] Val Accuracy: {self._last_val_acc:.4f} ({correct}/{total})")
+
+        # Rename the checkpoint saved just before this evaluation
+        # (Trainer saves before evaluating when both use the same step interval)
+        ckpt_dir = os.path.join(self.run_dir, f"checkpoint-{state.global_step}")
+        if os.path.exists(ckpt_dir):
+            epoch_str = f"{state.epoch:.2f}"
+            acc_str = f"{self._last_val_acc:.4f}"
+            new_name = os.path.join(self.run_dir, f"ckpt_{epoch_str}_{acc_str}")
+            os.rename(ckpt_dir, new_name)
+            print(f"[INFO] Checkpoint renamed → {os.path.basename(new_name)}")
+            if self._last_val_acc > self.best_val_acc:
+                self.best_val_acc = self._last_val_acc
+                self.best_ckpt = new_name
 
 
 # ============================================================
@@ -245,6 +324,12 @@ collator = DataCollatorForCompletionOnlyLM(
 # ============================================================
 # 7. 訓練參數
 # ============================================================
+import math
+steps_per_epoch = math.ceil(len(train_dataset) / (config.BATCH_SIZE * config.GRAD_ACCUMULATION_STEPS))
+eval_steps = max(1, int(steps_per_epoch * config.EVAL_EVERY_N_EPOCH))
+print(f"[INFO] Steps per epoch: {steps_per_epoch}, eval/save every {eval_steps} steps "
+      f"(every {config.EVAL_EVERY_N_EPOCH} epoch)")
+
 training_args = SFTConfig(
     output_dir=run_dir,
     num_train_epochs=config.NUM_EPOCHS,
@@ -258,11 +343,11 @@ training_args = SFTConfig(
     fp16=config.FP16,
     bf16=config.BF16,
     logging_steps=config.LOGGING_STEPS,
-    save_strategy=config.SAVE_STRATEGY,
-    eval_strategy="epoch",
-    save_total_limit=2,
-    load_best_model_at_end=True,
-    metric_for_best_model="eval_loss",
+    save_strategy="steps",
+    save_steps=eval_steps,
+    eval_strategy="steps",
+    eval_steps=eval_steps,
+    save_total_limit=None,
     seed=config.SEED,
     report_to="none",
     optim="paged_adamw_8bit" if config.USE_QLORA else "adamw_torch",
@@ -282,6 +367,8 @@ training_args = SFTConfig(
 hf_train = HFDataset.from_dict({"text": [train_dataset[i]["text"] for i in range(len(train_dataset))]})
 hf_val = HFDataset.from_dict({"text": [val_dataset[i]["text"] for i in range(len(val_dataset))]})
 
+eval_callback = EvalAccCallback(val_data, tokenizer, run_dir)
+
 trainer = MemoryEfficientSFTTrainer(
     model=model,
     processing_class=tokenizer,
@@ -289,16 +376,22 @@ trainer = MemoryEfficientSFTTrainer(
     eval_dataset=hf_val,
     args=training_args,
     data_collator=collator,
+    callbacks=[eval_callback],
 )
 
 print("[INFO] 開始訓練...")
 trainer.train()
 
 # ============================================================
-# 9. 儲存最終 Adapter 權重 (已自動載入 best checkpoint)
+# 9. 儲存最佳 Adapter 權重
 # ============================================================
 final_dir = os.path.join(run_dir, "final_adapter")
-model.save_pretrained(final_dir)
+if eval_callback.best_ckpt and os.path.exists(eval_callback.best_ckpt):
+    shutil.copytree(eval_callback.best_ckpt, final_dir)
+    print(f"[INFO] Best checkpoint (acc={eval_callback.best_val_acc:.4f}): "
+          f"{os.path.basename(eval_callback.best_ckpt)}")
+else:
+    model.save_pretrained(final_dir)
 tokenizer.save_pretrained(final_dir)
 print(f"[INFO] Adapter 已儲存至: {final_dir}")
 print("[INFO] 訓練完成!")
