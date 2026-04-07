@@ -16,10 +16,10 @@ LORA_TARGET_MODULES = r".*language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_
 
 # ---------- 訓練超參數 ----------
 LEARNING_RATE = 1e-4
-BATCH_SIZE = 1
-GRAD_ACCUMULATION_STEPS = 16          # effective batch = 1 * 16 = 16
+BATCH_SIZE = 2
+GRAD_ACCUMULATION_STEPS = 16 // BATCH_SIZE          # effective batch = 2 * 16 = 32
 NUM_EPOCHS = 3
-MAX_SEQ_LENGTH = 1024
+MAX_SEQ_LENGTH = 1536 # 2048
 WARMUP_RATIO = 0.05
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER_TYPE = "cosine"

@@ -78,7 +78,7 @@ def _chunked_ce_forward(self, input_ids=None, attention_mask=None, labels=None, 
         softcap = getattr(self.config.get_text_config(), "final_logit_softcapping", None)
 
         # Chunked lm_head + CE: each chunk needs [CHUNK, vocab] in float32 (~67 MB at 64 tokens)
-        CHUNK = 64
+        CHUNK = 128
         loss_parts = []
         for start in range(0, n_tokens, CHUNK):
             chunk_hs = flat_hs[start: start + CHUNK]
@@ -191,7 +191,7 @@ if config.USE_QLORA:
         device_map="cuda:0",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
-        attn_implementation="eager",
+        attn_implementation="sdpa",
     )
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 else:
@@ -200,7 +200,7 @@ else:
         device_map="cuda:0",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
-        attn_implementation="eager",
+        attn_implementation="sdpa",
     )
 
 # Apply chunked cross-entropy monkey-patch to avoid OOM from full logits materialization
