@@ -93,9 +93,9 @@ max_new_tokens = 250 if config.AUG_REVERSE_COT else 5
 # -------------------- 解析 verdict --------------------
 VALID_VERDICTS = {"A", "B", "tie", "neither"}
 
-def parse_verdict(generated_text: str, prompt: str) -> str:
-    """從生成文本中提取 verdict。支援 CoT 模式（答案在最後）。"""
-    answer = generated_text[len(prompt):].strip()
+def parse_verdict(answer: str) -> str:
+    """從生成的新 token 文字中提取 verdict。支援 CoT 模式（答案在最後）。"""
+    answer = answer.strip()
 
     if not answer:
         return "tie"
@@ -163,6 +163,8 @@ for i in tqdm(range(0, len(test_data), batch_size), desc="Batched Inference"):
         max_length=config.MAX_SEQ_LENGTH,
     ).to(model.device)
 
+    input_len = inputs["input_ids"].shape[1]
+
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -172,8 +174,10 @@ for i in tqdm(range(0, len(test_data), batch_size), desc="Batched Inference"):
         )
 
     for j, output in enumerate(outputs):
-        generated = tokenizer.decode(output, skip_special_tokens=True)
-        verdict = parse_verdict(generated, prompts[j])
+        # 只解碼新生成的 token，避免 chat template special token 造成字串切片錯誤
+        new_tokens = output[input_len:]
+        answer = tokenizer.decode(new_tokens, skip_special_tokens=True)
+        verdict = parse_verdict(answer)
         results.append({"id": batch_samples[j]["id"], "verdict": verdict})
 
 # -------------------- 寫入 CSV --------------------

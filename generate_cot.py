@@ -10,7 +10,6 @@
 # ============================================================
 
 import json
-import re
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from tqdm import tqdm
@@ -99,6 +98,8 @@ for sample in tqdm(train_data, desc="Generating CoT"):
         prompt, return_tensors="pt", truncation=True, max_length=config.MAX_SEQ_LENGTH
     ).to(model.device)
 
+    input_len = inputs["input_ids"].shape[1]
+
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -109,8 +110,9 @@ for sample in tqdm(train_data, desc="Generating CoT"):
             pad_token_id=tokenizer.pad_token_id,
         )
 
-    generated = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    rationale = generated[len(prompt):].strip()
+    # 只解碼新生成的 token
+    new_tokens = outputs[0][input_len:]
+    rationale = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
     # 過濾
     if is_valid_rationale(rationale):

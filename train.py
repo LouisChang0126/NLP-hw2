@@ -17,12 +17,25 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 
 import config
-from dataset import JudgeDataset, load_train_val, get_response_template
+from dataset import JudgeDataset, load_train_val, get_response_template_ids
+
+# ============================================================
+# 0. 全域 Seed 固定 (確保可復現)
+# ============================================================
+import random
+import numpy as np
+
+random.seed(config.SEED)
+np.random.seed(config.SEED)
+torch.manual_seed(config.SEED)
+torch.cuda.manual_seed_all(config.SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # ============================================================
 # 1. 動態輸出目錄與 config 備份
 # ============================================================
-timestamp = datetime.now().strftime("%m%d%H%S")
+timestamp = datetime.now().strftime("%m%d%H%M")
 model_short_name = config.MODEL_NAME.rstrip("/").split("/")[-1]
 run_dir = os.path.join(config.BASE_OUTPUT_DIR, f"{model_short_name}_{timestamp}")
 os.makedirs(run_dir, exist_ok=True)
@@ -105,10 +118,11 @@ model.print_trainable_parameters()
 # ============================================================
 # 6. DataCollator — 只對 Verdict 部分計算 Loss
 # ============================================================
-response_template = get_response_template(tokenizer)
-print(f"[INFO] Response template: {repr(response_template)}")
+response_template_ids = get_response_template_ids(tokenizer)
+print(f"[INFO] Response template IDs: {response_template_ids}")
+print(f"[INFO] Response template decoded: {repr(tokenizer.decode(response_template_ids))}")
 collator = DataCollatorForCompletionOnlyLM(
-    response_template=response_template,
+    response_template=response_template_ids,
     tokenizer=tokenizer,
 )
 

@@ -88,35 +88,38 @@ def build_prompt(dialog_1: list[dict], dialog_2: list[dict],
     )
     return prompt
 
-def get_response_template(tokenizer) -> str:
-    """自動偵測 chat template 中 model/assistant 回覆的起始標記。
-    用於 DataCollatorForCompletionOnlyLM。"""
+def get_response_template_ids(tokenizer) -> list[int]:
+    """自動偵測 chat template 中 model/assistant 回覆的起始標記 (token IDs)。
+    用於 DataCollatorForCompletionOnlyLM。
+    回傳 token IDs 而非字串，避免 special token 被 encode 拆散導致匹配失敗。"""
     dummy = [{"role": "user", "content": "X"}]
-    without = tokenizer.apply_chat_template(
-        dummy, tokenize=False, add_generation_prompt=False
+    without_ids = tokenizer.apply_chat_template(
+        dummy, tokenize=True, add_generation_prompt=False
     )
-    with_gen = tokenizer.apply_chat_template(
-        dummy, tokenize=False, add_generation_prompt=True
+    with_gen_ids = tokenizer.apply_chat_template(
+        dummy, tokenize=True, add_generation_prompt=True
     )
-    # generation prompt = with_gen 比 without 多出來的部分
-    response_template = with_gen[len(without):]
-    if not response_template:
-        # fallback: 嘗試常見格式
-        response_template = "<start_of_turn>model\n"
-    return response_template
+    response_ids = with_gen_ids[len(without_ids):]
+    if not response_ids:
+        # fallback: 手動 encode 常見格式
+        response_ids = tokenizer.encode(
+            "<start_of_turn>model\n", add_special_tokens=False
+        )
+    return response_ids
 
 def build_train_text(sample: dict, tokenizer,
                      use_diverse_prompt: bool = False,
                      use_cot: bool = False) -> str:
-    """建立完整的訓練文本 (prompt + [rationale +] label)。"""
+    """建立完整的訓練文本 (prompt + [rationale +] label + EOS)。"""
     tid = random.randint(0, len(_USER_CONTENTS) - 1) if use_diverse_prompt else 0
     verdict = sample["verdict"]
     prompt = build_prompt(sample["dialog_1"], sample["dialog_2"], tokenizer, tid)
+    eos = tokenizer.eos_token or ""
 
     if use_cot and sample.get("rationale"):
-        return prompt + sample["rationale"].strip() + "\n" + verdict
+        return prompt + sample["rationale"].strip() + "\n" + verdict + eos
     else:
-        return prompt + verdict
+        return prompt + verdict + eos
 
 # ============================================================
 # 策略 1: 位置交換與標籤反轉
@@ -203,6 +206,7 @@ def load_train_val(val_ratio: float = None):
     if config.AUG_POSITION_SWAP:
         swapped = position_swap(train_data)
         train_data = train_data + swapped
+        random.seed(config.SEED)
         random.shuffle(train_data)
         print(f"[AUG] Position Swap: 訓練資料擴增至 {len(train_data)} 筆")
 
