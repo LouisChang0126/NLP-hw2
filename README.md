@@ -89,7 +89,7 @@ python generate_cot.py
 
 | 參數 | 預設值 | 說明 |
 |------|--------|------|
-| `MODEL_NAME` | `google/gemma-3-4b-it` | HuggingFace 模型路徑 |
+| `MODEL_NAME` | `google/gemma-4-E4B-it` | HuggingFace 模型路徑 |
 | `USE_QLORA` | `True` | 啟用 4-bit QLoRA 量化 |
 | `LORA_R` | `16` | LoRA rank |
 | `LORA_ALPHA` | `32` | LoRA alpha |

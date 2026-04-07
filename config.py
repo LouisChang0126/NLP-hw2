@@ -3,18 +3,18 @@
 # ============================================================
 
 # ---------- 模型 ----------
-MODEL_NAME = "google/gemma-3-4b-it"   # HuggingFace 路徑或本地路徑
+MODEL_NAME = "google/gemma-4-E4B-it"   # HuggingFace 路徑或本地路徑
 
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
-LORA_R = 16
-LORA_ALPHA = 32
+LORA_R = 64 # 128
+LORA_ALPHA = LORA_R * 2
 LORA_DROPOUT = 0.05
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj",
                        "gate_proj", "up_proj", "down_proj"]
 
 # ---------- 訓練超參數 ----------
-LEARNING_RATE = 2e-4
+LEARNING_RATE = 1e-4
 BATCH_SIZE = 2
 GRAD_ACCUMULATION_STEPS = 8           # effective batch = 2 * 8 = 16
 NUM_EPOCHS = 3
@@ -44,3 +44,8 @@ AUG_POSITION_SWAP = True              # 策略1: 位置交換與標籤反轉
 AUG_REVERSE_COT = False               # 策略2: 本地逆向思維鏈 (需先跑 generate_cot.py)
 AUG_REVERSE_COT_FILE = "data/train_cot.json"  # CoT 生成結果路徑
 AUG_PROMPT_DIVERSE = True             # 策略3: Prompt 模板多樣化
+
+# ---------- Test-Time Augmentation ----------
+TTA_ENABLED = True                    # 啟用 TTA (多數決)
+TTA_POSITION_SWAP = True              # TTA: 原順序 + 反順序
+TTA_PROMPT_TEMPLATES = [0, 1, 2, 3]   # TTA: 使用哪些 prompt 模板 (索引)
