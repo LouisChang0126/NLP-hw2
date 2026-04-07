@@ -44,7 +44,7 @@ parser.add_argument(
 parser.add_argument(
     "--batch_size",
     type=int,
-    default=4,
+    default=16,
     help="推論 batch size",
 )
 args = parser.parse_args()

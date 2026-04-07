@@ -48,6 +48,6 @@ AUG_REVERSE_COT_FILE = "data/train_cot.json"  # CoT 生成結果路徑
 AUG_PROMPT_DIVERSE = True             # 策略3: Prompt 模板多樣化
 
 # ---------- Test-Time Augmentation ----------
-TTA_ENABLED = True                    # 啟用 TTA (多數決)
+TTA_ENABLED = False                    # 啟用 TTA (多數決)
 TTA_POSITION_SWAP = True              # TTA: 原順序 + 反順序
 TTA_PROMPT_TEMPLATES = [0, 1, 2, 3]   # TTA: 使用哪些 prompt 模板 (索引)
