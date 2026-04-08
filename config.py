@@ -19,7 +19,7 @@ LEARNING_RATE = 5e-5
 BATCH_SIZE = 2
 GRAD_ACCUMULATION_STEPS = 32 // BATCH_SIZE          # effective batch = 2 * 16 = 32
 NUM_EPOCHS = 3
-MAX_SEQ_LENGTH = 1536 # 2048
+MAX_SEQ_LENGTH = 2048 # 1536
 WARMUP_RATIO = 0.1
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER_TYPE = "cosine"
@@ -40,7 +40,7 @@ BF16 = True
 LOGGING_STEPS = 10
 EVAL_EVERY_N_EPOCH = 0.25              # 每 n 個 epoch 做一次 validation
 SAVE_STRATEGY = "epoch"
-USE_FLASH_ATTENTION = False            # True = flash_attention_2, False = sdpa
+USE_FLASH_ATTENTION = False            # flash_attn_2 與 torch 2.6 不相容，sdpa 已內建 flash kernel
 NUM_LABELS = 4                         # 分類類別數
 
 # ---------- 資料擴增 ----------

@@ -24,7 +24,7 @@ from transformers import (
 )
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from sklearn.metrics import accuracy_score, log_loss
+from sklearn.metrics import accuracy_score
 from datasets import Dataset as HFDataset
 
 import config
@@ -61,7 +61,7 @@ def _cls_forward(self, input_ids=None, attention_mask=None, labels=None, **kwarg
         torch.arange(batch_size, device=hidden_states.device),
         sequence_lengths,
     ]
-    logits = self.score(pooled.float())
+    logits = self.score(pooled).float()
 
     loss = None
     if labels is not None:
@@ -91,7 +91,27 @@ run_dir = os.path.join(config.BASE_OUTPUT_DIR, f"{model_short_name}_{timestamp}"
 os.makedirs(run_dir, exist_ok=True)
 
 shutil.copy("config.py", os.path.join(run_dir, "config.py"))
-print(f"[INFO] 實驗目錄: {run_dir}")
+
+# --- 同時輸出到 console 和 log.txt ---
+import logging
+import sys
+
+log_path = os.path.join(run_dir, "log.txt")
+logger = logging.getLogger("train")
+logger.setLevel(logging.INFO)
+logger.handlers.clear()
+fmt = logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+fh.setFormatter(fmt)
+sh = logging.StreamHandler(sys.stdout)
+sh.setFormatter(fmt)
+logger.addHandler(fh)
+logger.addHandler(sh)
+
+def log(msg):
+    logger.info(msg)
+
+log(f"實驗目錄: {run_dir}")
 
 # ============================================================
 # 2. 載入資料
@@ -117,9 +137,9 @@ train_dataset = JudgeDataset(
     use_diverse_prompt=config.AUG_PROMPT_DIVERSE,
 )
 val_dataset = JudgeDataset(val_data, tokenizer)
-print(f"[INFO] Train: {len(train_dataset)}, Val: {len(val_dataset)}")
-print(f"[INFO] 擴增策略: Position Swap: {config.AUG_POSITION_SWAP}, "
-      f"Prompt Diverse: {config.AUG_PROMPT_DIVERSE}")
+log(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+log(f"擴增策略: Position Swap: {config.AUG_POSITION_SWAP}, "
+    f"Prompt Diverse: {config.AUG_PROMPT_DIVERSE}")
 
 
 def tokenize_function(examples):
@@ -178,7 +198,7 @@ else:
 for attr in ("vision_tower", "embed_vision", "audio_tower", "embed_audio"):
     if hasattr(model.model, attr):
         delattr(model.model, attr)
-        print(f"[INFO] 已刪除 model.model.{attr}")
+        log(f"已刪除 model.model.{attr}")
 torch.cuda.empty_cache()
 gc.collect()
 
@@ -187,7 +207,7 @@ hidden_size = model.config.text_config.hidden_size
 model.score = nn.Linear(hidden_size, config.NUM_LABELS, bias=False)
 model.score = model.score.to(device=model.device, dtype=torch.bfloat16)
 model.forward = types.MethodType(_cls_forward, model)
-print(f"[INFO] 分類頭: Linear({hidden_size}, {config.NUM_LABELS})")
+log(f"分類頭: Linear({hidden_size}, {config.NUM_LABELS})")
 
 # ============================================================
 # 5. 套用 LoRA (modules_to_save 確保分類頭一起訓練 & 儲存)
@@ -207,12 +227,14 @@ model.print_trainable_parameters()
 # ============================================================
 # 6. compute_metrics
 # ============================================================
+from sklearn.metrics import log_loss as sklearn_log_loss
+
 def compute_metrics(eval_preds):
     logits, labels = eval_preds
     probs = torch.softmax(torch.tensor(logits, dtype=torch.float32), dim=-1).numpy()
     preds = np.argmax(logits, axis=-1)
     acc = accuracy_score(labels, preds)
-    logloss = log_loss(labels, probs, labels=[0, 1, 2, 3])
+    logloss = sklearn_log_loss(labels, probs, labels=[0, 1, 2, 3])
     return {"accuracy": acc, "log_loss": logloss}
 
 # ============================================================
@@ -221,8 +243,8 @@ def compute_metrics(eval_preds):
 import math
 steps_per_epoch = math.ceil(len(hf_train) / (config.BATCH_SIZE * config.GRAD_ACCUMULATION_STEPS))
 eval_steps = max(1, int(steps_per_epoch * config.EVAL_EVERY_N_EPOCH))
-print(f"[INFO] Steps per epoch: {steps_per_epoch}, eval/save every {eval_steps} steps "
-      f"(every {config.EVAL_EVERY_N_EPOCH} epoch)")
+log(f"Steps per epoch: {steps_per_epoch}, eval/save every {eval_steps} steps "
+    f"(every {config.EVAL_EVERY_N_EPOCH} epoch)")
 
 training_args = TrainingArguments(
     output_dir=run_dir,
@@ -241,9 +263,7 @@ training_args = TrainingArguments(
     save_steps=eval_steps,
     eval_strategy="steps",
     eval_steps=eval_steps,
-    load_best_model_at_end=True,
-    metric_for_best_model="accuracy",
-    greater_is_better=True,
+    load_best_model_at_end=False,   # 關掉，自己管理 best model（避免改名衝突）
     save_total_limit=None,
     seed=config.SEED,
     report_to="none",
@@ -256,32 +276,51 @@ training_args = TrainingArguments(
 
 # ============================================================
 # 8. Checkpoint 重命名 Callback
+#    on_save  → 記錄剛存好的 checkpoint 路徑
+#    on_evaluate → 拿到 accuracy 後立刻重命名
 # ============================================================
 class RenameCheckpointCallback(TrainerCallback):
-    """eval 後將 checkpoint-XXX 重命名為 ckpt-epoch{X.XX}-acc{0.XXXX}。"""
-
-    def __init__(self, run_dir):
-        self.run_dir = run_dir
+    def __init__(self, output_dir):
+        self.output_dir = output_dir
         self.best_acc = 0.0
         self.best_ckpt = None
+        self._pending_ckpt = None       # on_save 暫存
+
+    def on_save(self, args, state, control, **kwargs):
+        ckpt_dir = os.path.join(self.output_dir, f"checkpoint-{state.global_step}")
+        if os.path.isdir(ckpt_dir):
+            self._pending_ckpt = ckpt_dir
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if metrics is None:
+        if metrics is None or self._pending_ckpt is None:
             return
         acc = metrics.get("eval_accuracy", 0.0)
         epoch = state.epoch or 0.0
 
-        ckpt_dir = os.path.join(self.run_dir, f"checkpoint-{state.global_step}")
-        if os.path.exists(ckpt_dir):
-            new_name = os.path.join(self.run_dir, f"ckpt-epoch{epoch:.2f}-acc{acc:.4f}")
+        new_name = os.path.join(
+            self.output_dir,
+            f"ckpt-epoch{epoch:.2f}-acc{acc:.4f}",
+        )
+        try:
             if os.path.exists(new_name):
                 shutil.rmtree(new_name)
-            os.rename(ckpt_dir, new_name)
-            print(f"[INFO] Checkpoint renamed → {os.path.basename(new_name)}")
+            os.rename(self._pending_ckpt, new_name)
+            log(f"Checkpoint renamed → {os.path.basename(new_name)}")
+        except OSError as e:
+            log(f"Checkpoint rename failed: {e}")
+            new_name = self._pending_ckpt   # fallback: 用原名
 
-            if acc > self.best_acc:
-                self.best_acc = acc
-                self.best_ckpt = new_name
+        if acc > self.best_acc:
+            self.best_acc = acc
+            self.best_ckpt = new_name
+            log(f"New best accuracy: {acc:.4f}")
+
+        self._pending_ckpt = None
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """把 Trainer 的 training log 也寫進 log.txt。"""
+        if logs:
+            log(f"step={state.global_step} {logs}")
 
 rename_cb = RenameCheckpointCallback(run_dir)
 
@@ -301,7 +340,7 @@ trainer = Trainer(
     callbacks=[rename_cb],
 )
 
-print("[INFO] 開始訓練...")
+log("開始訓練...")
 trainer.train()
 
 # ============================================================
@@ -310,10 +349,11 @@ trainer.train()
 final_dir = os.path.join(run_dir, "final_adapter")
 if rename_cb.best_ckpt and os.path.exists(rename_cb.best_ckpt):
     shutil.copytree(rename_cb.best_ckpt, final_dir)
-    print(f"[INFO] Best checkpoint (acc={rename_cb.best_acc:.4f}): "
-          f"{os.path.basename(rename_cb.best_ckpt)}")
+    log(f"Best checkpoint (acc={rename_cb.best_acc:.4f}): "
+        f"{os.path.basename(rename_cb.best_ckpt)}")
 else:
     model.save_pretrained(final_dir)
+    log("No best checkpoint found, saving current model")
 tokenizer.save_pretrained(final_dir)
-print(f"[INFO] Adapter 已儲存至: {final_dir}")
-print("[INFO] 訓練完成!")
+log(f"Adapter 已儲存至: {final_dir}")
+log("訓練完成!")

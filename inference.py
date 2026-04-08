@@ -54,7 +54,7 @@ def _cls_forward(self, input_ids=None, attention_mask=None, labels=None, **kwarg
         torch.arange(batch_size, device=hidden_states.device),
         sequence_lengths,
     ]
-    logits = self.score(pooled.float())
+    logits = self.score(pooled).float()
 
     loss = None
     if labels is not None:
