@@ -23,7 +23,8 @@ class EvalAccCallback(TrainerCallback):
 
     def __init__(self, val_data, tokenizer, run_dir):
         self.val_data = val_data
-        self.tokenizer = tokenizer
+        # Unsloth may return a Processor; extract the underlying tokenizer for encoding
+        self.tokenizer = tokenizer.tokenizer if hasattr(tokenizer, "tokenizer") else tokenizer
         self.run_dir = run_dir
         self._last_val_acc = 0.0
         self.best_val_acc = 0.0

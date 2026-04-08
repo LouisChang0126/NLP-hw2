@@ -10,7 +10,7 @@ MODEL_NAME = "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"  # Unsloth 預量化版�
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
 LORA_R = 64 # 32
-LORA_ALPHA = LORA_R
+LORA_ALPHA = 16
 LORA_DROPOUT = 0.05
 # Regex: only match language_model layers, exclude vision_tower (Gemma4ClippableLinear)
 LORA_TARGET_MODULES = r".*language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)"
@@ -20,7 +20,7 @@ LEARNING_RATE = 1e-4
 BATCH_SIZE = 2
 GRAD_ACCUMULATION_STEPS = 32 // BATCH_SIZE          # effective batch = 2 * 16 = 32
 NUM_EPOCHS = 3
-MAX_SEQ_LENGTH = 2048 # 1536
+MAX_SEQ_LENGTH = 2048
 WARMUP_RATIO = 0.05
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER_TYPE = "cosine"
