@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(python3 -c \"import json; d=json.load\\(open\\('c:/Users/user/Desktop/NLP hw2/data/train.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:2000]\\)\")",
-      "Bash(python3 -c \"import json; d=json.load\\(open\\('c:/Users/user/Desktop/NLP hw2/data/test.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:1000]\\)\")"
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('c:/Users/user/Desktop/NLP hw2/data/test.json'\\)\\); print\\(json.dumps\\(d[0], indent=2, ensure_ascii=False\\)[:1000]\\)\")",
+      "Bash(git checkout:*)",
+      "Bash(CUDA_VISIBLE_DEVICES=4 python train.py)",
+      "Bash(pkill -f \"python train.py\")"
     ]
   }
 }

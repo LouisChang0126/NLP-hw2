@@ -37,8 +37,7 @@ def _user_content_0(flat_1: str, flat_2: str) -> str:
         "- tie: Both responses are equally good\n"
         "- neither: Both responses are equally bad\n\n"
         f"### Response A\n{flat_1}\n\n"
-        f"### Response B\n{flat_2}\n\n"
-        "Output ONLY your verdict (A, B, tie, neither)."
+        f"### Response B\n{flat_2}"
     )
 
 def _user_content_1(flat_1: str, flat_2: str) -> str:
@@ -47,8 +46,7 @@ def _user_content_1(flat_1: str, flat_2: str) -> str:
         "and two different AI assistants. Determine which assistant provided "
         "the better response.\n\n"
         f"[Conversation 1]\n{flat_1}\n\n"
-        f"[Conversation 2]\n{flat_2}\n\n"
-        "Answer with exactly one of: A, B, tie, neither"
+        f"[Conversation 2]\n{flat_2}"
     )
 
 def _user_content_2(flat_1: str, flat_2: str) -> str:
@@ -56,8 +54,7 @@ def _user_content_2(flat_1: str, flat_2: str) -> str:
         "As a strict linguist and quality assessor, compare the following two AI "
         "assistant responses. Judge based on helpfulness, accuracy, and clarity.\n\n"
         f"--- Assistant A ---\n{flat_1}\n\n"
-        f"--- Assistant B ---\n{flat_2}\n\n"
-        "Respond with only: A, B, tie, or neither"
+        f"--- Assistant B ---\n{flat_2}"
     )
 
 def _user_content_3(flat_1: str, flat_2: str) -> str:
@@ -65,8 +62,7 @@ def _user_content_3(flat_1: str, flat_2: str) -> str:
         "You are a judge in a blind comparison. Two AI assistants answered "
         "the same question. Decide which answer is better, or if they are equal.\n\n"
         f"<<Response A>>\n{flat_1}\n\n"
-        f"<<Response B>>\n{flat_2}\n\n"
-        "Output one of: A, B, tie, neither"
+        f"<<Response B>>\n{flat_2}"
     )
 
 _USER_CONTENTS = [_user_content_0, _user_content_1, _user_content_2, _user_content_3]
@@ -77,59 +73,16 @@ _USER_CONTENTS = [_user_content_0, _user_content_1, _user_content_2, _user_conte
 
 def build_prompt(dialog_1: list[dict], dialog_2: list[dict],
                  tokenizer, template_id: int = 0) -> str:
-    """使用 tokenizer 的 chat template 組合 prompt。"""
+    """使用 tokenizer 的 chat template 組合 prompt（分類模式，不加 generation prompt）。"""
     flat_1 = flatten_dialog(dialog_1)
     flat_2 = flatten_dialog(dialog_2)
     user_content = _USER_CONTENTS[template_id](flat_1, flat_2)
 
     messages = [{"role": "user", "content": user_content}]
     prompt = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
+        messages, tokenize=False, add_generation_prompt=False
     )
     return prompt
-
-def get_response_template_ids(tokenizer) -> list[int]:
-    """自動偵測 chat template 中 model/assistant 回覆的起始標記 (token IDs)。
-    用於 DataCollatorForCompletionOnlyLM。
-    回傳 token IDs 而非字串，避免 special token 被 encode 拆散導致匹配失敗。
-    相容 transformers 5.x: apply_chat_template(tokenize=True) 回傳 dict。"""
-    dummy = [{"role": "user", "content": "X"}]
-
-    def _get_ids(result):
-        # apply_chat_template may return a list or a BatchEncoding/dict
-        if hasattr(result, "input_ids"):
-            return result.input_ids
-        if hasattr(result, "__getitem__") and not isinstance(result, list):
-            return result["input_ids"]
-        return result
-
-    without_ids = _get_ids(tokenizer.apply_chat_template(
-        dummy, tokenize=True, add_generation_prompt=False
-    ))
-    with_gen_ids = _get_ids(tokenizer.apply_chat_template(
-        dummy, tokenize=True, add_generation_prompt=True
-    ))
-    response_ids = with_gen_ids[len(without_ids):]
-    if not response_ids:
-        # fallback: 手動 encode 常見格式
-        response_ids = tokenizer.encode(
-            "<start_of_turn>model\n", add_special_tokens=False
-        )
-    return response_ids
-
-def build_train_text(sample: dict, tokenizer,
-                     use_diverse_prompt: bool = False,
-                     use_cot: bool = False) -> str:
-    """建立完整的訓練文本 (prompt + [rationale +] label + EOS)。"""
-    tid = random.randint(0, len(_USER_CONTENTS) - 1) if use_diverse_prompt else 0
-    verdict = sample["verdict"]
-    prompt = build_prompt(sample["dialog_1"], sample["dialog_2"], tokenizer, tid)
-    eos = tokenizer.eos_token or ""
-
-    if use_cot and sample.get("rationale"):
-        return prompt + sample["rationale"].strip() + "\n" + verdict + eos
-    else:
-        return prompt + verdict + eos
 
 # ============================================================
 # 策略 1: 位置交換與標籤反轉
@@ -153,27 +106,23 @@ def position_swap(data: list[dict]) -> list[dict]:
 # Dataset 類別
 # ============================================================
 class JudgeDataset(Dataset):
-    """用於 SFTTrainer 的 Dataset，回傳 dict 含 'text' 欄位。"""
+    """序列分類 Dataset，回傳 dict 含 'text' (str) 與 'labels' (int) 欄位。"""
 
     def __init__(self, data: list[dict], tokenizer,
-                 use_diverse_prompt: bool = False,
-                 use_cot: bool = False):
+                 use_diverse_prompt: bool = False):
         self.data = data
         self.tokenizer = tokenizer
         self.use_diverse_prompt = use_diverse_prompt
-        self.use_cot = use_cot
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         sample = self.data[idx]
-        text = build_train_text(
-            sample, self.tokenizer,
-            use_diverse_prompt=self.use_diverse_prompt,
-            use_cot=self.use_cot,
-        )
-        return {"text": text}
+        tid = random.randint(0, len(_USER_CONTENTS) - 1) if self.use_diverse_prompt else 0
+        text = build_prompt(sample["dialog_1"], sample["dialog_2"], self.tokenizer, tid)
+        label = LABEL2ID[sample["verdict"]]
+        return {"text": text, "labels": label}
 
 # ============================================================
 # 載入輔助

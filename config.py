@@ -8,8 +8,8 @@ MODEL_NAME = "google/gemma-4-E4B-it"   # HuggingFace 路徑或本地路徑
 
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
-LORA_R = 32 # 64
-LORA_ALPHA = LORA_R
+LORA_R = 64 # 32
+LORA_ALPHA = LORA_R * 0.5
 LORA_DROPOUT = 0.05
 # Regex: only match language_model layers, exclude vision_tower (Gemma4ClippableLinear)
 LORA_TARGET_MODULES = r".*language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)"
@@ -20,7 +20,7 @@ BATCH_SIZE = 2
 GRAD_ACCUMULATION_STEPS = 32 // BATCH_SIZE          # effective batch = 2 * 16 = 32
 NUM_EPOCHS = 3
 MAX_SEQ_LENGTH = 1536 # 2048
-WARMUP_RATIO = 0.05
+WARMUP_RATIO = 0.1
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER_TYPE = "cosine"
 
@@ -40,6 +40,8 @@ BF16 = True
 LOGGING_STEPS = 10
 EVAL_EVERY_N_EPOCH = 0.25              # 每 n 個 epoch 做一次 validation
 SAVE_STRATEGY = "epoch"
+USE_FLASH_ATTENTION = False            # True = flash_attention_2, False = sdpa
+NUM_LABELS = 4                         # 分類類別數
 
 # ---------- 資料擴增 ----------
 AUG_POSITION_SWAP = True              # 策略1: 位置交換與標籤反轉

@@ -1,5 +1,6 @@
 # ============================================================
-# inference.py — 推論與 Kaggle CSV 生成 (支援 TTA 多數決)
+# inference.py — 序列分類推論 + TTA (softmax 平均) + Kaggle CSV 生成
+# (Gemma4 無原生 SeqCls，用 CausalLM + 自訂分類頭)
 # ============================================================
 #
 # 用法:
@@ -10,43 +11,65 @@
 import argparse
 import csv
 import gc
-import re
 import os
-from collections import Counter
+import types
 
+import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.modeling_outputs import SequenceClassifierOutputWithPast
 from peft import PeftModel
 from tqdm import tqdm
+from collections import Counter
 
 import config
-from dataset import build_prompt, load_json, SWAP_VERDICT
+from dataset import build_prompt, load_json, ID2LABEL
+
+# ============================================================
+# 分類 forward (與 train.py 相同)
+# ============================================================
+def _cls_forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+    _allowed = ("position_ids", "past_key_values", "inputs_embeds", "cache_position")
+    body_kwargs = {k: v for k, v in kwargs.items() if k in _allowed}
+
+    outputs = self.model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        use_cache=False,
+        return_dict=True,
+        **body_kwargs,
+    )
+    hidden_states = outputs.last_hidden_state
+
+    if attention_mask is not None:
+        seq_len = attention_mask.shape[1]
+        sequence_lengths = seq_len - 1 - attention_mask.flip(dims=[1]).argmax(dim=1)
+    else:
+        sequence_lengths = input_ids.shape[1] - 1
+
+    batch_size = hidden_states.shape[0]
+    pooled = hidden_states[
+        torch.arange(batch_size, device=hidden_states.device),
+        sequence_lengths,
+    ]
+    logits = self.score(pooled.float())
+
+    loss = None
+    if labels is not None:
+        loss = F.cross_entropy(logits, labels)
+
+    return SequenceClassifierOutputWithPast(loss=loss, logits=logits)
 
 # -------------------- 解析命令列 --------------------
 parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--adapter_dir",
-    type=str,
-    required=True,
-    help="微調後的 adapter 目錄 (e.g. outputs/.../final_adapter)",
-)
-parser.add_argument(
-    "--test_json",
-    type=str,
-    default=config.TEST_JSON,
-)
-parser.add_argument(
-    "--output_csv",
-    type=str,
-    default=None,
-    help="輸出 CSV 路徑，預設存在 adapter_dir 的父目錄",
-)
-parser.add_argument(
-    "--batch_size",
-    type=int,
-    default=16,
-    help="推論 batch size",
-)
+parser.add_argument("--adapter_dir", type=str, required=True,
+                    help="微調後的 adapter 目錄")
+parser.add_argument("--test_json", type=str, default=config.TEST_JSON)
+parser.add_argument("--output_csv", type=str, default=None,
+                    help="輸出 CSV 路徑，預設存在 adapter_dir 的父目錄")
+parser.add_argument("--batch_size", type=int, default=16, help="推論 batch size")
 args = parser.parse_args()
 
 # -------------------- 輸出路徑 --------------------
@@ -56,6 +79,8 @@ if args.output_csv is None:
 
 # -------------------- 載入模型 --------------------
 print(f"[INFO] 載入 base model: {config.MODEL_NAME}")
+attn_impl = "flash_attention_2" if config.USE_FLASH_ATTENTION else "sdpa"
+
 if config.USE_QLORA:
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -69,7 +94,7 @@ if config.USE_QLORA:
         device_map="auto",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
+        attn_implementation=attn_impl,
     )
 else:
     base_model = AutoModelForCausalLM.from_pretrained(
@@ -77,16 +102,22 @@ else:
         device_map="auto",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
+        attn_implementation=attn_impl,
     )
 
-# 刪除不需要的多模態 Encoder 以釋放 VRAM（text-only 任務）
+# 刪除不需要的多模態 Encoder
 for attr in ("vision_tower", "embed_vision", "audio_tower", "embed_audio"):
     if hasattr(base_model.model, attr):
         delattr(base_model.model, attr)
-        print(f"[INFO] 已刪除 base_model.model.{attr}")
+        print(f"[INFO] 已刪除 {attr}")
 torch.cuda.empty_cache()
 gc.collect()
+
+# 加掛分類頭 & monkey-patch forward (PEFT 載入時會覆蓋 score 權重)
+hidden_size = base_model.config.text_config.hidden_size
+base_model.score = nn.Linear(hidden_size, config.NUM_LABELS, bias=False)
+base_model.score = base_model.score.to(device=base_model.device, dtype=torch.bfloat16)
+base_model.forward = types.MethodType(_cls_forward, base_model)
 
 print(f"[INFO] 載入 adapter: {args.adapter_dir}")
 model = PeftModel.from_pretrained(base_model, args.adapter_dir)
@@ -95,64 +126,12 @@ model.eval()
 tokenizer = AutoTokenizer.from_pretrained(args.adapter_dir, trust_remote_code=True)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = "left"
-
-# -------------------- 推論長度 --------------------
-max_new_tokens = 250 if config.AUG_REVERSE_COT else 5
-
-# -------------------- 解析 verdict --------------------
-VALID_VERDICTS = {"A", "B", "tie", "neither"}
-
-def parse_verdict(answer: str) -> str:
-    """從生成的新 token 文字中提取 verdict。支援 CoT 模式（答案在最後）。"""
-    answer = answer.strip()
-
-    if not answer:
-        return "tie"
-
-    lines = [l.strip() for l in answer.split("\n") if l.strip()]
-    last_line = lines[-1] if lines else answer
-
-    # 嘗試直接匹配最後一行的第一個 token
-    first_token = last_line.split()[0] if last_line.split() else ""
-    first_token_clean = re.sub(r"[^a-zA-Z]", "", first_token)
-    if first_token_clean in VALID_VERDICTS:
-        return first_token_clean
-
-    # 也嘗試第一行（非 CoT 模式）
-    first_line = lines[0] if lines else answer
-    first_word = first_line.split()[0] if first_line.split() else ""
-    first_word_clean = re.sub(r"[^a-zA-Z]", "", first_word)
-    if first_word_clean in VALID_VERDICTS:
-        return first_word_clean
-
-    # 從整段回答中搜尋（優先從後面找）
-    last_lower = last_line.lower()
-    for v in ["neither", "tie"]:
-        if v in last_lower:
-            return v
-    if last_lower.startswith("a") or "response a" in last_lower:
-        return "A"
-    if last_lower.startswith("b") or "response b" in last_lower:
-        return "B"
-
-    # 全文搜尋 fallback
-    answer_lower = answer.lower()
-    for v in ["neither", "tie"]:
-        if v in answer_lower:
-            return v
-    if "response a" in answer_lower:
-        return "A"
-    if "response b" in answer_lower:
-        return "B"
-
-    return "tie"
+tokenizer.padding_side = "left"  # 批次推論使用 left padding
 
 # ============================================================
-# 批次推論核心函式
+# 批次推論核心函式 — 回傳 softmax 機率
 # ============================================================
-def run_batch_inference(prompts: list[str]) -> list[str]:
-    """對一批 prompt 執行生成，回傳解析後的 verdict 列表。"""
+def run_batch_inference(prompts: list[str]) -> np.ndarray:
     inputs = tokenizer(
         prompts,
         return_tensors="pt",
@@ -161,98 +140,77 @@ def run_batch_inference(prompts: list[str]) -> list[str]:
         max_length=config.MAX_SEQ_LENGTH,
     ).to(model.device)
 
-    input_len = inputs["input_ids"].shape[1]
-
     with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=tokenizer.pad_token_id,
-        )
+        outputs = model(**inputs)
+        probs = F.softmax(outputs.logits.float(), dim=-1)
 
-    verdicts = []
-    for output in outputs:
-        new_tokens = output[input_len:]
-        answer = tokenizer.decode(new_tokens, skip_special_tokens=True)
-        verdicts.append(parse_verdict(answer))
-    return verdicts
+    return probs.cpu().numpy()
 
 # ============================================================
-# TTA: 建立所有推論視角
+# 載入測試資料 & 建立 prompts
 # ============================================================
 test_data = load_json(args.test_json)
 print(f"[INFO] 測試資料筆數: {len(test_data)}")
 
 use_tta = config.TTA_ENABLED
-tta_templates = config.TTA_PROMPT_TEMPLATES if use_tta else [0]
-tta_swap = config.TTA_POSITION_SWAP if use_tta else False
+print(f"[INFO] TTA: {use_tta}")
 
-# 建立 (sample_idx, prompt, is_swapped) 的完整推論清單
-inference_jobs: list[tuple[int, str, bool]] = []
-
-for idx, sample in enumerate(test_data):
-    for tid in tta_templates:
-        # 原順序
-        prompt = build_prompt(sample["dialog_1"], sample["dialog_2"], tokenizer, tid)
-        inference_jobs.append((idx, prompt, False))
-
-        # 反順序
-        if tta_swap:
-            prompt_swap = build_prompt(
-                sample["dialog_2"], sample["dialog_1"], tokenizer, tid
-            )
-            inference_jobs.append((idx, prompt_swap, True))
-
-num_views = len(tta_templates) * (2 if tta_swap else 1)
-print(f"[INFO] TTA: {use_tta} | 模板數: {len(tta_templates)} | "
-      f"位置交換: {tta_swap} | 每筆視角數: {num_views}")
-print(f"[INFO] 總推論次數: {len(inference_jobs)}, batch_size: {args.batch_size}")
+normal_prompts = [
+    build_prompt(sample["dialog_1"], sample["dialog_2"], tokenizer)
+    for sample in test_data
+]
+if use_tta:
+    swapped_prompts = [
+        build_prompt(sample["dialog_2"], sample["dialog_1"], tokenizer)
+        for sample in test_data
+    ]
 
 # ============================================================
-# 執行批次推論
+# 執行批次推論 — 正常順序
 # ============================================================
-# 收集每筆 sample 的所有投票
-votes: dict[int, list[str]] = {i: [] for i in range(len(test_data))}
 batch_size = args.batch_size
+all_probs = []
 
-for i in tqdm(range(0, len(inference_jobs), batch_size), desc="TTA Inference"):
-    batch_jobs = inference_jobs[i : i + batch_size]
-    batch_prompts = [job[1] for job in batch_jobs]
+print("[INFO] 推論中 (正常順序)...")
+for i in tqdm(range(0, len(normal_prompts), batch_size), desc="Normal"):
+    batch = normal_prompts[i : i + batch_size]
+    probs = run_batch_inference(batch)
+    all_probs.append(probs)
 
-    batch_verdicts = run_batch_inference(batch_prompts)
-
-    for (sample_idx, _, is_swapped), verdict in zip(batch_jobs, batch_verdicts):
-        if is_swapped:
-            # 反順序的結果需要翻轉 A↔B，tie/neither 不變
-            verdict = SWAP_VERDICT[verdict]
-        votes[sample_idx].append(verdict)
+probs_normal = np.concatenate(all_probs, axis=0)  # [N, 4]
 
 # ============================================================
-# 多數決 (Majority Vote)
+# 執行批次推論 — TTA 反順序
 # ============================================================
-def majority_vote(vote_list: list[str]) -> str:
-    """多數決。平手時優先選 A/B (避免模型預設偏 tie)。"""
-    count = Counter(vote_list)
-    max_count = max(count.values())
-    candidates = [v for v, c in count.items() if c == max_count]
+if use_tta:
+    all_probs_swap = []
+    print("[INFO] 推論中 (TTA 反順序)...")
+    for i in tqdm(range(0, len(swapped_prompts), batch_size), desc="TTA Swap"):
+        batch = swapped_prompts[i : i + batch_size]
+        probs = run_batch_inference(batch)
+        all_probs_swap.append(probs)
 
-    if len(candidates) == 1:
-        return candidates[0]
+    probs_swap = np.concatenate(all_probs_swap, axis=0)  # [N, 4]
 
-    # 平手打破規則：A/B 優先於 tie/neither
-    priority = ["A", "B", "tie", "neither"]
-    for p in priority:
-        if p in candidates:
-            return p
-    return candidates[0]
+    # 關鍵對齊：反順序中 A(idx=0) 和 B(idx=1) 意義互換
+    probs_swap_aligned = probs_swap.copy()
+    probs_swap_aligned[:, 0] = probs_swap[:, 1]  # 原 B -> 對齊後 A
+    probs_swap_aligned[:, 1] = probs_swap[:, 0]  # 原 A -> 對齊後 B
+
+    final_probs = (probs_normal + probs_swap_aligned) / 2.0
+else:
+    final_probs = probs_normal
+
+# ============================================================
+# Argmax 取最終 verdict
+# ============================================================
+pred_ids = np.argmax(final_probs, axis=-1)
 
 results = []
 for idx, sample in enumerate(test_data):
-    final_verdict = majority_vote(votes[idx])
-    results.append({"id": sample["id"], "verdict": final_verdict})
+    verdict = ID2LABEL[pred_ids[idx]]
+    results.append({"id": sample["id"], "verdict": verdict})
 
-# -------------------- 寫入 CSV --------------------
 results.sort(key=lambda x: x["id"])
 
 with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
@@ -263,17 +221,11 @@ with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
 print(f"[INFO] 已生成 {len(results)} 筆預測")
 print(f"[INFO] CSV 已儲存至: {args.output_csv}")
 
-# -------------------- 統計 --------------------
 dist = Counter(r["verdict"] for r in results)
 print(f"[INFO] 最終 Verdict 分佈: {dict(dist)}")
 
-# TTA 投票一致性統計
 if use_tta:
-    unanimous = sum(1 for v in votes.values() if len(set(v)) == 1)
-    print(f"[INFO] TTA 全票一致: {unanimous}/{len(test_data)} "
-          f"({unanimous/len(test_data)*100:.1f}%)")
-
-    # 各視角的原始分佈
-    all_raw = [v for vlist in votes.values() for v in vlist]
-    raw_dist = Counter(all_raw)
-    print(f"[INFO] TTA 原始投票分佈 (含翻轉後): {dict(raw_dist)}")
+    normal_preds = np.argmax(probs_normal, axis=-1)
+    consistent = np.sum(normal_preds == pred_ids)
+    print(f"[INFO] TTA 前後一致: {consistent}/{len(test_data)} "
+          f"({consistent/len(test_data)*100:.1f}%)")

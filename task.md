@@ -1,54 +1,46 @@
-# Task: Migrate `train.py` to Unsloth Framework
+# Vibe Coding Task: LLM-as-a-Judge (Kaggle 衝刺高分版)
 
-## 📍 Context & Objective
-We are currently fine-tuning a Large Language Model (`google/gemma-4-E4B-it`) for an "LLM-as-a-Judge" task using QLoRA. 
-Currently, the codebase relies on native Hugging Face `transformers` and `peft`, along with a manual Monkey Patch for chunked cross-entropy (`_chunked_ce_forward`) and manual deletion of multimodal layers to prevent VRAM OOM.
+## 1. 專案背景與重構目標
+目前專案使用的是 `AutoModelForCausalLM` (生成式) 搭配 `SFTTrainer`，這容易導致格式錯誤且對多輪長對話的分類邊界不夠清晰。
+**本次重構的核心目標：** 將整個 Pipeline 全面切換為 **`AutoModelForSequenceClassification` (序列分類器)** 架構，並引入 Kaggle 頂級玩家的策略 (TTA、邊界規則、分層抽樣、大 Rank LoRA) 以極限提升 Accuracy 分數。
 
-**Objective:** Refactor `train.py` (and relevant parts of `config.py`) to use the **Unsloth** framework (`unsloth.FastLanguageModel`). Unsloth provides heavily optimized Triton kernels for RoPE, Attention, Cross-Entropy, and LoRA, which will naturally solve our VRAM issues and speed up training by 2x. I want to fine-tuning `unsloth/gemma-4-E4B-it-bnb-4bit`
+專案包含四個核心檔案：`config.py`, `dataset.py`, `train.py`, `inference.py`。
+請依照下列 Phase 1 到 Phase 4 的指示進行程式碼重構。
 
-## 🛠️ Specific Instructions
+---
 
-### 1. Clean Up Legacy Hacks in `train.py`
-Since Unsloth handles memory-efficient training natively, please **DELETE** the following legacy workarounds in `train.py`:
-- Delete the `_chunked_ce_forward` function and the monkey-patching logic (`model._orig_forward = model.forward`, etc.).
-- Delete the custom `MemoryEfficientSFTTrainer` class.
-- Delete the manual layer deletion logic (`del model.model.vision_tower`, etc.).
-- Remove `BitsAndBytesConfig` and `prepare_model_for_kbit_training` imports, as Unsloth handles 4-bit loading internally.
+## Phase 1: 更新配置中心 (`config.py`)
+請修改或新增以下參數，這是分類任務與提升效能的關鍵：
+1. **學習率與預熱:** 將 `LEARNING_RATE` 調降至 `5e-5` (因為分類頭是隨機初始化的，太高會崩潰)；新增 `WARMUP_RATIO = 0.1`。
 
-### 2. Refactor Model & Tokenizer Loading
-Replace the `AutoModelForCausalLM` loading logic with `FastLanguageModel.from_pretrained`.
-- Import: `from unsloth import FastLanguageModel`
-- Setup parameters:
-  - `model_name = config.MODEL_NAME`
-  - `max_seq_length = config.MAX_SEQ_LENGTH`
-  - `dtype = None` (Auto-detect)
-  - `load_in_4bit = config.USE_QLORA`
-- The `FastLanguageModel.from_pretrained` call returns BOTH `model` and `tokenizer`. Please use the returned tokenizer instead of loading it separately via `AutoTokenizer`.
-- Ensure `tokenizer.padding_side = "right"` is set after loading.
+---
 
-### 3. Refactor PEFT / LoRA Application
-Replace the standard `get_peft_model` and `LoraConfig` with Unsloth's optimized method:
-- Use `model = FastLanguageModel.get_peft_model(...)`
-- Pass in parameters from `config.py`: `r`, `lora_alpha`, `lora_dropout`, `target_modules`.
-- Set `bias="none"`, `use_gradient_checkpointing="unsloth"`, `random_state=config.SEED`, and `use_rslora=False`.
+## Phase 2: 資料處理與智慧截斷 (`dataset.py`)
+1. **分層抽樣 (Stratified Split):** 修改 `load_train_val()`，使用 `sklearn.model_selection.train_test_split` 並設定 `stratify=verdicts`，確保 train/val 的 A, B, tie, neither 比例完全一致。
+2. **Prompt 調整:** 因為是分類模型，不需要模型「生成文字」。請移除 Prompt 模板最後面的 `Verdict:` 提示語。只需將 Dialog_1 和 Dialog_2 清晰排版並回傳即可。
+3. **Dataset 輸出格式:** `__getitem__` 現在不需要回傳 label 字串，請直接回傳 `text` 與 `labels` (int 型態：0, 1, 2, 3，分別對應 A, B, tie, neither)。
 
-### 4. SFTTrainer Adjustments
-- Revert back to using the standard `SFTTrainer` from the `trl` library (instead of `MemoryEfficientSFTTrainer`).
-- Keep the existing `DataCollatorForCompletionOnlyLM` logic. This is crucial for our task so we only compute loss on the verdict.
-- Ensure `dataset_text_field="text"` and `max_seq_length=config.MAX_SEQ_LENGTH` are passed properly to the SFTTrainer.
-- You may remove `use_liger_kernel=True` from `SFTConfig` as Unsloth replaces the need for Liger.
+---
 
-### 5. Config Updates (`config.py`)
-- Ensure `MAX_SEQ_LENGTH` is appropriately set (e.g., `2048`).
-- Check if `MODEL_NAME` needs to be changed. (If Unsloth has a pre-quantized 4-bit GGUF/HF version like `"unsloth/gemma-4-E4B-it-bnb-4bit"`, recommend adding it as a comment for fast downloading, but keep the default `google/gemma-4-E4B-it` working).
+## Phase 3: 訓練主幹切換 (`train.py`)
+這是最重要的架構切換。
+1. **模型載入:** 拔除 `AutoModelForCausalLM`，改用 `AutoModelForSequenceClassification.from_pretrained(..., num_labels=4)`。
+2. **Flash Attention:** 載入模型時，若 `config.USE_FLASH_ATTENTION` 為 True，加入 `attn_implementation="flash_attention_2"` 參數。
+3. **Trainer 替換:** - 捨棄 `trl.SFTTrainer`，改用 `transformers.Trainer`。
+   - 使用 `DataCollatorWithPadding(tokenizer=tokenizer)` 處理 Padding。
+   - 實作 `compute_metrics` 函數：傳入 `eval_preds`，計算並回傳 Accuracy 和 Log Loss。
+4. **抓取最佳模型:** 在 `TrainingArguments` 中設定 `load_best_model_at_end=True` 與 `metric_for_best_model="eval_loss"`，搭配 `save_strategy="epoch"` 與 `eval_strategy="epoch"`。
 
-### 6. Saving the Model
-Ensure the final model and tokenizer are saved correctly at the end of the script using standard `model.save_pretrained(final_dir)` and `tokenizer.save_pretrained(final_dir)`.
+---
 
-## ✅ Acceptance Criteria
-- `train.py` runs successfully using `FastLanguageModel`.
-- The manual chunked CE patch is fully removed.
-- VRAM usage is stable, and training speed is improved.
-- The verdict masking (via `DataCollatorForCompletionOnlyLM`) remains functional.
+## Phase 4: 推論與測試時增強 (`inference.py`)
+推論腳本需要大幅重構，加入以下三層防護網：
+1. **批次推論 (Batched Inference):** 將 `tokenizer.padding_side` 設為 `"left"`，並實作 Batch 推論迴圈以榨乾算力。
+2. **實作 TTA (Test-Time Augmentation) 核心邏輯:**
+   針對每一筆資料 (排除上述邊界測資的)，模型必須推論兩次：
+   - 第一次 (`Prompt_1`): 正常順序 `[Dialog 1, Dialog 2]` -> 取得 softmax 預測機率 `probs1`。
+   - 第二次 (`Prompt_2`): 顛倒順序 `[Dialog 2, Dialog 1]` -> 取得 softmax 預測機率 `probs2`。
+   - **關鍵對齊:** 因為輸入顛倒了，模型預測的 A 和 B 意義互換。必須將 `probs2` 的 index 0 (原 A) 和 index 1 (原 B) 對調，得到 `probs2_aligned`。
+   - **最終決策:** 計算 `final_probs = (probs1 + probs2_aligned) / 2`，取 `argmax` 作為最終 verdict。
 
-Please review the current `train.py` and `config.py` and apply these changes step by step.
+---
