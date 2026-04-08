@@ -79,7 +79,7 @@ if args.output_csv is None:
 
 # -------------------- 載入模型 --------------------
 print(f"[INFO] 載入 base model: {config.MODEL_NAME}")
-attn_impl = "flash_attention_2" if config.USE_FLASH_ATTENTION else "sdpa"
+attn_impl = "sdpa"
 
 if config.USE_QLORA:
     bnb_config = BitsAndBytesConfig(

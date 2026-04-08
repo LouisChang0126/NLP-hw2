@@ -167,7 +167,7 @@ hf_val = to_hf_dataset(val_dataset).map(tokenize_function, batched=True, remove_
 # ============================================================
 # 4. 載入模型 (CausalLM + 自訂分類頭)
 # ============================================================
-attn_impl = "flash_attention_2" if config.USE_FLASH_ATTENTION else "sdpa"
+attn_impl = "sdpa"
 
 if config.USE_QLORA:
     bnb_config = BitsAndBytesConfig(

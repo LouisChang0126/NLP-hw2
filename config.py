@@ -40,7 +40,6 @@ BF16 = True
 LOGGING_STEPS = 10
 EVAL_EVERY_N_EPOCH = 0.25              # 每 n 個 epoch 做一次 validation
 SAVE_STRATEGY = "epoch"
-USE_FLASH_ATTENTION = False            # flash_attn_2 與 torch 2.6 不相容，sdpa 已內建 flash kernel
 NUM_LABELS = 4                         # 分類類別數
 
 # ---------- 資料擴增 ----------
