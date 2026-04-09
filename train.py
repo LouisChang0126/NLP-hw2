@@ -278,26 +278,33 @@ training_args = TrainingArguments(
 
 # ============================================================
 # 8. Checkpoint 重命名 Callback
-#    on_save  → 記錄剛存好的 checkpoint 路徑
-#    on_evaluate → 拿到 accuracy 後立刻重命名
+#    transformers 5.x 執行順序: on_evaluate → on_save
+#    因此在 on_evaluate 暫存 metrics，在 on_save 完成重命名
 # ============================================================
 class RenameCheckpointCallback(TrainerCallback):
     def __init__(self, output_dir):
         self.output_dir = output_dir
         self.best_acc = 0.0
         self.best_ckpt = None
-        self._pending_ckpt = None       # on_save 暫存
-
-    def on_save(self, args, state, control, **kwargs):
-        ckpt_dir = os.path.join(self.output_dir, f"checkpoint-{state.global_step}")
-        if os.path.isdir(ckpt_dir):
-            self._pending_ckpt = ckpt_dir
+        self._last_eval_metrics = None   # on_evaluate 暫存 metrics
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if metrics is None or self._pending_ckpt is None:
+        if metrics is not None:
+            self._last_eval_metrics = {
+                "acc": metrics.get("eval_accuracy", 0.0),
+                "epoch": state.epoch or 0.0,
+            }
+
+    def on_save(self, args, state, control, **kwargs):
+        if self._last_eval_metrics is None:
             return
-        acc = metrics.get("eval_accuracy", 0.0)
-        epoch = state.epoch or 0.0
+        ckpt_dir = os.path.join(self.output_dir, f"checkpoint-{state.global_step}")
+        if not os.path.isdir(ckpt_dir):
+            return
+
+        acc = self._last_eval_metrics["acc"]
+        epoch = self._last_eval_metrics["epoch"]
+        self._last_eval_metrics = None
 
         new_name = os.path.join(
             self.output_dir,
@@ -306,18 +313,16 @@ class RenameCheckpointCallback(TrainerCallback):
         try:
             if os.path.exists(new_name):
                 shutil.rmtree(new_name)
-            os.rename(self._pending_ckpt, new_name)
+            os.rename(ckpt_dir, new_name)
             log(f"Checkpoint renamed → {os.path.basename(new_name)}")
         except OSError as e:
             log(f"Checkpoint rename failed: {e}")
-            new_name = self._pending_ckpt   # fallback: 用原名
+            new_name = ckpt_dir
 
         if acc > self.best_acc:
             self.best_acc = acc
             self.best_ckpt = new_name
             log(f"New best accuracy: {acc:.4f}")
-
-        self._pending_ckpt = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         """把 Trainer 的 training log 也寫進 log.txt。"""
