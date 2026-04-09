@@ -3,16 +3,20 @@
 # ============================================================
 
 # ---------- 模型 ----------
-MODEL_NAME = "google/gemma-4-E4B-it"   # HuggingFace 路徑或本地路徑
-# MODEL_NAME = "Qwen/Qwen3.5-9B" # "Qwen/Qwen3-8B"
+# MODEL_NAME = "google/gemma-4-E4B-it"   # HuggingFace 路徑
+MODEL_NAME = "Qwen/Qwen3-8B"
 
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
 LORA_R = 64 # 32
 LORA_ALPHA = LORA_R * 0.5
 LORA_DROPOUT = 0.05
-# Regex: only match language_model layers, exclude vision_tower (Gemma4ClippableLinear)
-LORA_TARGET_MODULES = r".*language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)"
+# LoRA target modules: Gemma-4 多模態需用 regex 排除 vision_tower；純文字模型直接用 list
+_MULTIMODAL_KEYWORDS = ("gemma-4", "gemma4")
+if any(kw in MODEL_NAME.lower() for kw in _MULTIMODAL_KEYWORDS):
+    LORA_TARGET_MODULES = r".*language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)"
+else:
+    LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # ---------- 訓練超參數 ----------
 LEARNING_RATE = 5e-5
@@ -49,6 +53,6 @@ AUG_REVERSE_COT_FILE = "data/train_cot.json"  # CoT 生成結果路徑
 AUG_PROMPT_DIVERSE = True             # 策略3: Prompt 模板多樣化
 
 # ---------- Test-Time Augmentation ----------
-TTA_ENABLED = False                    # 啟用 TTA (多數決)
+TTA_ENABLED = True                    # 啟用 TTA (多數決)
 TTA_POSITION_SWAP = True              # TTA: 原順序 + 反順序
 TTA_PROMPT_TEMPLATES = [0, 1, 2, 3]   # TTA: 使用哪些 prompt 模板 (索引)

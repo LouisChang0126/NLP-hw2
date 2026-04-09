@@ -203,7 +203,9 @@ torch.cuda.empty_cache()
 gc.collect()
 
 # --- 加掛分類頭 & monkey-patch forward ---
-hidden_size = model.config.text_config.hidden_size
+hidden_size = (model.config.text_config.hidden_size
+               if hasattr(model.config, "text_config")
+               else model.config.hidden_size)
 model.score = nn.Linear(hidden_size, config.NUM_LABELS, bias=False)
 model.score = model.score.to(device=model.device, dtype=torch.bfloat16)
 model.forward = types.MethodType(_cls_forward, model)

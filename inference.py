@@ -114,7 +114,9 @@ torch.cuda.empty_cache()
 gc.collect()
 
 # 加掛分類頭 & monkey-patch forward (PEFT 載入時會覆蓋 score 權重)
-hidden_size = base_model.config.text_config.hidden_size
+hidden_size = (base_model.config.text_config.hidden_size
+               if hasattr(base_model.config, "text_config")
+               else base_model.config.hidden_size)
 base_model.score = nn.Linear(hidden_size, config.NUM_LABELS, bias=False)
 base_model.score = base_model.score.to(device=base_model.device, dtype=torch.bfloat16)
 base_model.forward = types.MethodType(_cls_forward, base_model)
