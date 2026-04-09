@@ -9,7 +9,7 @@ MODEL_NAME = "Qwen/Qwen3-8B"
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
 LORA_R = 64 # 32
-LORA_ALPHA = LORA_R * 0.5
+LORA_ALPHA = LORA_R * 0.75
 LORA_DROPOUT = 0.05
 # LoRA target modules: Gemma-4 多模態需用 regex 排除 vision_tower；純文字模型直接用 list
 _MULTIMODAL_KEYWORDS = ("gemma-4", "gemma4")
