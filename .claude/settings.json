@@ -36,7 +36,28 @@
       "Bash(git stash:*)",
       "Bash(git branch:*)",
       "Bash(git push:*)",
-      "Bash(xargs ls:*)"
+      "Bash(xargs ls:*)",
+      "Bash(python -c \"import transformers, peft; print\\('transformers', transformers.__version__\\); print\\('peft', peft.__version__\\)\")",
+      "Bash(python -c \"from transformers import Trainer; from transformers.trainer_pt_utils import get_parameter_names; import inspect; print\\(inspect.signature\\(Trainer.get_optimizer_cls_and_kwargs\\)\\)\")",
+      "Bash(python -m py_compile model_head.py train.py inference.py)",
+      "Bash(python -m py_compile model_head.py train.py inference.py config.py)",
+      "Bash(python -m py_compile train.py)",
+      "Bash(CUDA_VISIBLE_DEVICES=2 python better_pairrm_inference.py --eval_train)",
+      "Bash(python -c \"import llm_blender; print\\(llm_blender.__file__\\)\")",
+      "Bash(nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total --format=csv,noheader)",
+      "Bash(CUDA_VISIBLE_DEVICES=2 python better_pairrm_inference.py --threshold_search)",
+      "Bash(ps -p 2811881 -o pid,stat,etime,pcpu --no-headers)",
+      "Bash(grep --line-buffered \"^=\\\\{10,\\\\}\")",
+      "Bash(python position_bias_analysis.py --adapter_dir outputs/Qwen3-8B_04112128/final_adapter --batch_size 8)",
+      "Bash(CUDA_VISIBLE_DEVICES=3 python position_bias_analysis.py --adapter_dir outputs/Qwen3-8B_04112128/final_adapter --batch_size 8)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 -c \"import json; data = json.load\\(open\\('/home/louis/NLP-hw2/data/train.json'\\)\\); print\\(f'Total samples: {len\\(data\\)}'\\); print\\('\\\\\\\\nFirst sample:'\\); print\\(json.dumps\\(data[0], indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import json; data = json.load\\(open\\('/home/louis/NLP-hw2/data/train.json'\\)\\); print\\('\\\\\\\\nSecond sample:'\\); print\\(json.dumps\\(data[1], indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import json; data = json.load\\(open\\('/home/louis/NLP-hw2/data/test.json'\\)\\); print\\(f'Test set samples: {len\\(data\\)}'\\); print\\('\\\\\\\\nFirst test sample:'\\); print\\(json.dumps\\(data[0], indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(python evaluate_val.py --model_name google/gemma-4-E4B-it --adapter_dir outputs/gemma-4-E4B-it_04141214/final_adapter --batch_size 8 --output_json outputs/gemma-4-E4B-it_04141214/val_eval.json)",
+      "Bash(python evaluate_val.py --model_name Qwen/Qwen3-8B --adapter_dir outputs/Qwen3-8B_04092343/final_adapter --batch_size 8 --output_json outputs/Qwen3-8B_04092343/val_eval.json)",
+      "Bash(python evaluate_val.py --model_name Qwen/Qwen3-8B --adapter_dir outputs/Qwen3-8B_04141722/final_adapter --batch_size 8 --output_json outputs/Qwen3-8B_04141722/val_eval.json)",
+      "Bash(python3 -c ':*)"
     ]
   }
 }
