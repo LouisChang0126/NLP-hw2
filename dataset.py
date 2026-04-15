@@ -149,18 +149,6 @@ def load_train_val(val_ratio: float = None):
     )
     # --------------------------------------------------
 
-    # 後面的策略 2 (CoT) 和 策略 1 (Position Swap) 邏輯完全不用動，保持原樣
-    if config.AUG_REVERSE_COT:
-        try:
-            cot_data = load_json(config.AUG_REVERSE_COT_FILE)
-            cot_map = {item["id"]: item.get("rationale", "") for item in cot_data}
-            for sample in train_data:
-                if sample["id"] in cot_map:
-                    sample["rationale"] = cot_map[sample["id"]]
-            print(f"[AUG] Reverse-CoT: 成功載入 {len(cot_map)} 筆理由")
-        except FileNotFoundError:
-            print(f"[AUG] 警告: CoT 檔案 {config.AUG_REVERSE_COT_FILE} 不存在，跳過")
-
     # --- 策略 1: 位置交換 ---
     if config.AUG_POSITION_SWAP:
         swapped = position_swap(train_data)

@@ -3,9 +3,9 @@
 # ============================================================
 
 # ---------- 模型 ----------
-# MODEL_NAME = "google/gemma-4-E4B-it"   # HuggingFace 路徑
-# MODEL_NAME = "Qwen/Qwen3-8B"
-MODEL_NAME = "Qwen/Qwen3.5-9B"
+MODEL_NAME = "Qwen/Qwen3-8B"   # HuggingFace 路徑
+# MODEL_NAME = "google/gemma-4-E4B-it"
+# MODEL_NAME = "Qwen/Qwen3.5-9B"
 
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
@@ -49,8 +49,6 @@ NUM_LABELS = 4                         # 分類類別數
 
 # ---------- 資料擴增 ----------
 AUG_POSITION_SWAP = True              # 策略1: 位置交換與標籤反轉
-AUG_REVERSE_COT = False               # 策略2: 本地逆向思維鏈 (需先跑 generate_cot.py)
-AUG_REVERSE_COT_FILE = "data/train_cot.json"  # CoT 生成結果路徑
 AUG_PROMPT_DIVERSE = True             # 策略3: Prompt 模板多樣化
 
 # ---------- Test-Time Augmentation ----------
