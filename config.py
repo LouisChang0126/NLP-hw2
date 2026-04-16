@@ -3,9 +3,10 @@
 # ============================================================
 
 # ---------- 模型 ----------
-MODEL_NAME = "Qwen/Qwen3-8B"   # HuggingFace 路徑
+MODEL_NAME = "Qwen/Qwen3.5-9B"   # HuggingFace 路徑
+# MODEL_NAME = "Qwen/Qwen3-8B"
 # MODEL_NAME = "google/gemma-4-E4B-it"
-# MODEL_NAME = "Qwen/Qwen3.5-9B"
+
 
 # ---------- LoRA / QLoRA ----------
 USE_QLORA = True                      # True = 4-bit QLoRA, False = 常規 LoRA
@@ -23,8 +24,8 @@ else:
 LEARNING_RATE = 5e-5
 BATCH_SIZE = 2
 GRAD_ACCUMULATION_STEPS = 32 // BATCH_SIZE          # effective batch = 2 * 16 = 32
-NUM_EPOCHS = 3
-MAX_SEQ_LENGTH = 3072 # 1536
+NUM_EPOCHS = 2
+MAX_SEQ_LENGTH = 3072
 WARMUP_RATIO = 0.1
 WEIGHT_DECAY = 0.01
 LR_SCHEDULER_TYPE = "cosine"

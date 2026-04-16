@@ -57,7 +57,9 @@
       "Bash(python evaluate_val.py --model_name google/gemma-4-E4B-it --adapter_dir outputs/gemma-4-E4B-it_04141214/final_adapter --batch_size 8 --output_json outputs/gemma-4-E4B-it_04141214/val_eval.json)",
       "Bash(python evaluate_val.py --model_name Qwen/Qwen3-8B --adapter_dir outputs/Qwen3-8B_04092343/final_adapter --batch_size 8 --output_json outputs/Qwen3-8B_04092343/val_eval.json)",
       "Bash(python evaluate_val.py --model_name Qwen/Qwen3-8B --adapter_dir outputs/Qwen3-8B_04141722/final_adapter --batch_size 8 --output_json outputs/Qwen3-8B_04141722/val_eval.json)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(export CUDA_VISIBLE_DEVICES=6)",
+      "Bash(python evaluate_val.py --model_name Qwen/Qwen3.5-9B --adapter_dir outputs/Qwen3.5-9B_04150035/final_adapter)"
     ]
   }
 }
